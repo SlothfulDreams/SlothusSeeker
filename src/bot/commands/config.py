@@ -66,7 +66,8 @@ class ConfigCommands(commands.Cog):
     async def view_config(self, interaction: discord.Interaction):
         """View current configuration."""
         guild_config = self.config_manager.get_guild_config(interaction.guild_id)
-        embed = create_config_embed(guild_config, interaction.guild.name)
+        scrape_interval = self.config_manager.get_scrape_interval()
+        embed = create_config_embed(guild_config, interaction.guild.name, scrape_interval)
 
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
@@ -92,6 +93,53 @@ class ConfigCommands(commands.Cog):
         except Exception as e:
             await interaction.followup.send(
                 f"❌ Error during scrape: {str(e)}",
+                ephemeral=True
+            )
+
+    @app_commands.command(
+        name="set_scrape_interval",
+        description="Set how often the bot scrapes for new internships (Admin only)"
+    )
+    @app_commands.describe(hours="Hours between scrapes (minimum 0.5, maximum 168)")
+    @app_commands.default_permissions(administrator=True)
+    async def set_scrape_interval(
+        self,
+        interaction: discord.Interaction,
+        hours: float
+    ):
+        """Set the scrape interval."""
+        # Validate input
+        if hours < 0.5:
+            await interaction.response.send_message(
+                "❌ Scrape interval must be at least 0.5 hours (30 minutes)",
+                ephemeral=True
+            )
+            return
+
+        if hours > 168:  # 1 week
+            await interaction.response.send_message(
+                "❌ Scrape interval cannot exceed 168 hours (1 week)",
+                ephemeral=True
+            )
+            return
+
+        try:
+            # Update the interval
+            self.config_manager.set_scrape_interval(hours)
+
+            # Restart the scraper task with new interval
+            from src.scheduler.tasks import get_scraper_cog
+            scraper_cog = get_scraper_cog(self.bot)
+            if scraper_cog:
+                await scraper_cog.restart_scraper(hours)
+
+            await interaction.response.send_message(
+                f"✅ Scrape interval updated to {hours} hours. The scheduler has been restarted.",
+                ephemeral=True
+            )
+        except Exception as e:
+            await interaction.response.send_message(
+                f"❌ Error updating interval: {str(e)}",
                 ephemeral=True
             )
 

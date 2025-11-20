@@ -87,12 +87,13 @@ def create_stats_embed(summer_count: int, offseason_count: int) -> discord.Embed
     return embed
 
 
-def create_config_embed(guild_config: dict, guild_name: str) -> discord.Embed:
+def create_config_embed(guild_config: dict, guild_name: str, scrape_interval: float = None) -> discord.Embed:
     """Create an embed showing current configuration.
 
     Args:
         guild_config: Configuration dictionary for the guild
         guild_name: Name of the guild
+        scrape_interval: Current scrape interval in hours (optional)
 
     Returns:
         Discord Embed object
@@ -116,6 +117,21 @@ def create_config_embed(guild_config: dict, guild_name: str) -> discord.Embed:
         value=f"<#{offseason_channel}>" if offseason_channel else "Not configured",
         inline=False
     )
+
+    if scrape_interval is not None:
+        # Format interval nicely
+        if scrape_interval < 1:
+            interval_str = f"{scrape_interval * 60:.0f} minutes"
+        elif scrape_interval == 1:
+            interval_str = "1 hour"
+        else:
+            interval_str = f"{scrape_interval} hours"
+
+        embed.add_field(
+            name="⏰ Scrape Interval",
+            value=interval_str,
+            inline=False
+        )
 
     if not summer_channel and not offseason_channel:
         embed.description = "No channels configured yet. Use `/set_summer_channel` or `/set_offseason_channel` to get started!"

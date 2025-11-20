@@ -2,7 +2,7 @@
 import json
 from pathlib import Path
 from typing import Dict, Optional, Set
-from src.config.settings import CONFIG_FILE, LAST_SCRAPE_FILE
+from src.config.settings import CONFIG_FILE, LAST_SCRAPE_FILE, SCRAPE_INTERVAL_HOURS
 
 
 class ConfigManager:
@@ -16,7 +16,7 @@ class ConfigManager:
     def _ensure_files_exist(self):
         """Create config files if they don't exist."""
         if not self.config_file.exists():
-            self.config_file.write_text("{}")
+            self.config_file.write_text('{"global": {}}')
         if not self.last_scrape_file.exists():
             self.last_scrape_file.write_text('{"summer": [], "offseason": []}')
 
@@ -91,3 +91,30 @@ class ConfigManager:
             "offseason": list(offseason_ids)
         }
         self.last_scrape_file.write_text(json.dumps(data, indent=2))
+
+    # Scrape Interval Methods
+    def get_scrape_interval(self) -> float:
+        """Get the current scrape interval in hours.
+
+        Returns:
+            Scrape interval in hours (default from settings if not set)
+        """
+        config = self.get_config()
+        global_config = config.get("global", {})
+        return global_config.get("scrape_interval_hours", SCRAPE_INTERVAL_HOURS)
+
+    def set_scrape_interval(self, hours: float):
+        """Set the scrape interval in hours.
+
+        Args:
+            hours: Scrape interval in hours (must be > 0)
+        """
+        if hours <= 0:
+            raise ValueError("Scrape interval must be greater than 0")
+
+        config = self.get_config()
+        if "global" not in config:
+            config["global"] = {}
+
+        config["global"]["scrape_interval_hours"] = hours
+        self.config_file.write_text(json.dumps(config, indent=2))
