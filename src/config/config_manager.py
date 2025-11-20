@@ -120,15 +120,23 @@ class ConfigManager:
         self.config_file.write_text(json.dumps(config, indent=2))
 
     # Start Date Methods
-    def get_scrape_start_timestamp(self) -> Optional[int]:
+    def get_scrape_start_timestamp(self) -> int:
         """Get the start timestamp for filtering internships.
 
         Returns:
-            Unix timestamp or None if not set (will only scrape new postings)
+            Unix timestamp (defaults to 3 days ago if not set)
         """
         config = self.get_config()
         global_config = config.get("global", {})
-        return global_config.get("scrape_start_timestamp")
+
+        # Check if user has set a custom start timestamp
+        if "scrape_start_timestamp" in global_config:
+            return global_config["scrape_start_timestamp"]
+
+        # Default: 3 days ago
+        from datetime import datetime, timedelta
+        default_start = datetime.now() - timedelta(days=3)
+        return int(default_start.timestamp())
 
     def set_scrape_start_timestamp(self, timestamp: int):
         """Set the start timestamp for filtering internships.

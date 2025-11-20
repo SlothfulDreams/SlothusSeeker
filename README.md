@@ -100,9 +100,10 @@ All commands are slash commands (`/command`):
 1. Invite the bot to your Discord server
 2. Run `/set_summer_channel #summer-internships`
 3. Run `/set_offseason_channel #offseason-jobs`
-4. **IMPORTANT**: Run `/set_start_date 30` to only scrape internships from the last 30 days
-   - This prevents the bot from posting all 11,000+ historical internships on first run!
-   - Adjust the number based on your needs (e.g., 7, 14, 30, 60 days)
+4. (Optional) Run `/set_start_date 30` to customize how far back to scrape
+   - **Default**: Bot scrapes internships from the last **3 days**
+   - Adjust based on your needs (e.g., 7, 14, 30, 60 days)
+   - Prevents flooding with old/expired internships
 5. (Optional) Run `/set_scrape_interval 3` to scrape every 3 hours instead of default 6
 6. Wait for the bot to scrape (or run `/scrape_now`)
 7. New internships will be posted automatically!
@@ -142,10 +143,10 @@ Both files persist across restarts and are gitignored.
 ## Filtering Logic
 
 **Date Filtering:**
-- Use `/set_start_date <days_back>` to only scrape internships posted after a certain date
-- Prevents flooding channels with old/expired internships on first run
-- Recommended: Set to 30-60 days for a good balance
-- If not set, bot will scrape all internships (11,000+!)
+- **Default**: Bot only scrapes internships from the last **3 days**
+- Use `/set_start_date <days_back>` to customize the time window (1-365 days)
+- Prevents flooding channels with old/expired internships
+- Recommended values: 3-7 days for fresh postings, 30-60 days for broader coverage
 
 **Summer Channel:**
 - Receives internships with "Summer" in the term field
