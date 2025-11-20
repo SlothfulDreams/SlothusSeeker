@@ -90,7 +90,8 @@ All commands are slash commands (`/command`):
 
 - `/set_summer_channel <channel>` - Set channel for Summer 2026 internships
 - `/set_offseason_channel <channel>` - Set channel for Fall/Winter/Spring internships
-- `/view_config` - View current channel configuration
+- `/set_scrape_interval <hours>` - Set how often to scrape for new internships (0.5-168 hours)
+- `/view_config` - View current channel configuration and scrape interval
 - `/scrape_now` - Manually trigger an internship scrape
 
 ## Usage Example
@@ -98,8 +99,9 @@ All commands are slash commands (`/command`):
 1. Invite the bot to your Discord server
 2. Run `/set_summer_channel #summer-internships`
 3. Run `/set_offseason_channel #offseason-jobs`
-4. Wait for the bot to scrape (or run `/scrape_now`)
-5. New internships will be posted automatically!
+4. (Optional) Run `/set_scrape_interval 3` to scrape every 3 hours instead of default 6
+5. Wait for the bot to scrape (or run `/scrape_now`)
+6. New internships will be posted automatically!
 
 ## Project Structure
 
