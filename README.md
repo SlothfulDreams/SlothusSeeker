@@ -1,1 +1,181 @@
-# SlothusSeeker
+# SlothusSeeker Discord Bot
+
+A Discord bot that automatically scrapes internship listings from [SimplifyJobs/Summer2026-Internships](https://github.com/SimplifyJobs/Summer2026-Internships) and posts them to configured Discord channels.
+
+## Features
+
+- 🔄 **Automatic Scraping**: Periodically fetches new internship listings (configurable interval)
+- 🎯 **Smart Filtering**: Separates Summer vs Off-Season (Fall/Winter/Spring) internships
+- 🔔 **Multi-Server Support**: Works across multiple Discord servers with independent configurations
+- 🚫 **Deduplication**: Tracks posted internships to avoid spam
+- ⚡ **Slash Commands**: Modern Discord slash commands for easy configuration
+- 📊 **Rich Embeds**: Beautiful formatted internship posts with all details
+
+## Prerequisites
+
+- Python 3.11 or higher
+- UV package manager
+- Discord Bot Token
+- GitHub Token (optional, for higher rate limits)
+
+## Setup
+
+### 1. Clone the Repository
+
+```bash
+git clone <repository-url>
+cd SlothusSeeker
+```
+
+### 2. Install UV (if not already installed)
+
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+### 3. Install Dependencies
+
+```bash
+uv sync
+```
+
+### 4. Configure Environment Variables
+
+Copy the example environment file and fill in your credentials:
+
+```bash
+cp .env.example .env
+```
+
+Edit `.env` and add:
+
+```env
+DISCORD_BOT_TOKEN=your_discord_bot_token_here
+GITHUB_TOKEN=your_github_token_here  # Optional
+SCRAPE_INTERVAL_HOURS=6
+```
+
+### 5. Create a Discord Bot
+
+1. Go to [Discord Developer Portal](https://discord.com/developers/applications)
+2. Click "New Application" and give it a name
+3. Go to the "Bot" section and click "Add Bot"
+4. Copy the bot token and add it to your `.env` file
+5. Enable "Message Content Intent" under Privileged Gateway Intents
+6. Go to "OAuth2" > "URL Generator"
+7. Select scopes: `bot` and `applications.commands`
+8. Select bot permissions:
+   - Send Messages
+   - Embed Links
+   - Read Message History
+9. Copy the generated URL and use it to invite the bot to your server
+
+## Running the Bot
+
+### Development
+
+```bash
+uv run python main.py
+```
+
+### Production
+
+For production, consider using a process manager like systemd or Docker.
+
+## Bot Commands
+
+All commands are slash commands (`/command`):
+
+### Configuration Commands (Admin Only)
+
+- `/set_summer_channel <channel>` - Set channel for Summer 2026 internships
+- `/set_offseason_channel <channel>` - Set channel for Fall/Winter/Spring internships
+- `/view_config` - View current channel configuration
+- `/scrape_now` - Manually trigger an internship scrape
+
+## Usage Example
+
+1. Invite the bot to your Discord server
+2. Run `/set_summer_channel #summer-internships`
+3. Run `/set_offseason_channel #offseason-jobs`
+4. Wait for the bot to scrape (or run `/scrape_now`)
+5. New internships will be posted automatically!
+
+## Project Structure
+
+```
+SlothusSeeker/
+├── src/
+│   ├── bot/              # Discord bot implementation
+│   │   ├── bot.py        # Main bot class
+│   │   ├── embeds.py     # Discord embed formatting
+│   │   └── commands/     # Slash commands
+│   │       └── config.py
+│   ├── scraper/          # GitHub scraping logic
+│   │   ├── github_client.py
+│   │   └── data_models.py
+│   ├── scheduler/        # Background tasks
+│   │   └── tasks.py
+│   └── config/           # Configuration management
+│       ├── settings.py
+│       └── config_manager.py
+├── main.py              # Entry point
+├── pyproject.toml       # UV dependencies
+└── .env                 # Environment variables (not committed)
+```
+
+## Data Files
+
+The bot creates two JSON files automatically:
+
+- `config.json` - Stores channel configurations per server
+- `last_scrape.json` - Tracks posted internships to prevent duplicates
+
+Both files persist across restarts and are gitignored.
+
+## Filtering Logic
+
+**Summer Channel:**
+- Receives internships with "Summer" in the term field
+- Examples: Summer 2026, Summer 2027
+
+**Off-Season Channel:**
+- Receives internships with "Fall", "Winter", or "Spring" in the term field
+- Examples: Fall 2025, Winter 2026, Spring 2027
+
+**Both Channels:**
+- Only active internships (`active: true`)
+- Only visible internships (`is_visible: true`)
+
+## Troubleshooting
+
+### Bot doesn't respond to commands
+
+- Ensure the bot has proper permissions in your server
+- Check that slash commands are synced (restart the bot)
+- Verify the bot is online in your server
+
+### No internships being posted
+
+- Check that channels are configured with `/view_config`
+- Verify your GitHub token is valid (if using one)
+- Check console logs for errors
+- Try running `/scrape_now` manually
+
+### Rate limiting issues
+
+- Add a GitHub token to your `.env` file for higher rate limits
+- Increase `SCRAPE_INTERVAL_HOURS` to scrape less frequently
+
+## Contributing
+
+Pull requests are welcome! Please ensure your code follows the existing style.
+
+## License
+
+MIT License
+
+## Acknowledgments
+
+- Internship data from [SimplifyJobs/Summer2026-Internships](https://github.com/SimplifyJobs/Summer2026-Internships)
+- Built with [discord.py](https://github.com/Rapptz/discord.py)
