@@ -67,7 +67,8 @@ class ConfigCommands(commands.Cog):
         """View current configuration."""
         guild_config = self.config_manager.get_guild_config(interaction.guild_id)
         scrape_interval = self.config_manager.get_scrape_interval()
-        embed = create_config_embed(guild_config, interaction.guild.name, scrape_interval)
+        start_timestamp = self.config_manager.get_scrape_start_timestamp()
+        embed = create_config_embed(guild_config, interaction.guild.name, scrape_interval, start_timestamp)
 
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
@@ -100,29 +101,14 @@ class ConfigCommands(commands.Cog):
         name="set_scrape_interval",
         description="Set how often the bot scrapes for new internships (Admin only)"
     )
-    @app_commands.describe(hours="Hours between scrapes (minimum 0.5, maximum 168)")
+    @app_commands.describe(hours="Hours between scrapes (0.5-168)")
     @app_commands.default_permissions(administrator=True)
     async def set_scrape_interval(
         self,
         interaction: discord.Interaction,
-        hours: float
+        hours: app_commands.Range[float, 0.5, 168.0]
     ):
         """Set the scrape interval."""
-        # Validate input
-        if hours < 0.5:
-            await interaction.response.send_message(
-                "❌ Scrape interval must be at least 0.5 hours (30 minutes)",
-                ephemeral=True
-            )
-            return
-
-        if hours > 168:  # 1 week
-            await interaction.response.send_message(
-                "❌ Scrape interval cannot exceed 168 hours (1 week)",
-                ephemeral=True
-            )
-            return
-
         try:
             # Update the interval
             self.config_manager.set_scrape_interval(hours)
@@ -140,6 +126,43 @@ class ConfigCommands(commands.Cog):
         except Exception as e:
             await interaction.response.send_message(
                 f"❌ Error updating interval: {str(e)}",
+                ephemeral=True
+            )
+
+    @app_commands.command(
+        name="set_start_date",
+        description="Set the earliest date to scrape internships from (Admin only)"
+    )
+    @app_commands.describe(days_back="How many days back to scrape (1-365)")
+    @app_commands.default_permissions(administrator=True)
+    async def set_start_date(
+        self,
+        interaction: discord.Interaction,
+        days_back: app_commands.Range[int, 1, 365]
+    ):
+        """Set the start date for scraping internships."""
+        try:
+            import time
+            from datetime import datetime, timedelta
+
+            # Calculate timestamp
+            start_date = datetime.now() - timedelta(days=days_back)
+            start_timestamp = int(start_date.timestamp())
+
+            # Update the config
+            self.config_manager.set_scrape_start_timestamp(start_timestamp)
+
+            # Format date for display
+            date_str = start_date.strftime("%B %d, %Y")
+
+            await interaction.response.send_message(
+                f"✅ Start date set to {date_str} ({days_back} days ago).\n"
+                f"The bot will only scrape internships posted after this date.",
+                ephemeral=True
+            )
+        except Exception as e:
+            await interaction.response.send_message(
+                f"❌ Error updating start date: {str(e)}",
                 ephemeral=True
             )
 

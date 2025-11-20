@@ -118,3 +118,30 @@ class ConfigManager:
 
         config["global"]["scrape_interval_hours"] = hours
         self.config_file.write_text(json.dumps(config, indent=2))
+
+    # Start Date Methods
+    def get_scrape_start_timestamp(self) -> Optional[int]:
+        """Get the start timestamp for filtering internships.
+
+        Returns:
+            Unix timestamp or None if not set (will only scrape new postings)
+        """
+        config = self.get_config()
+        global_config = config.get("global", {})
+        return global_config.get("scrape_start_timestamp")
+
+    def set_scrape_start_timestamp(self, timestamp: int):
+        """Set the start timestamp for filtering internships.
+
+        Args:
+            timestamp: Unix timestamp for filtering (must be > 0)
+        """
+        if timestamp <= 0:
+            raise ValueError("Timestamp must be greater than 0")
+
+        config = self.get_config()
+        if "global" not in config:
+            config["global"] = {}
+
+        config["global"]["scrape_start_timestamp"] = timestamp
+        self.config_file.write_text(json.dumps(config, indent=2))
