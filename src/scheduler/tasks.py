@@ -20,11 +20,17 @@ async def scrape_and_post(bot: commands.Bot, config_manager: ConfigManager):
         # Initialize GitHub client
         github_client = GitHubClient()
 
-        # Get last scrape data
+        # Get last scrape data and start timestamp
         last_scrape = config_manager.get_last_scrape()
+        start_timestamp = config_manager.get_scrape_start_timestamp()
+
+        if start_timestamp:
+            from datetime import datetime
+            date_str = datetime.fromtimestamp(start_timestamp).strftime("%Y-%m-%d")
+            print(f"[Scraper] Filtering internships posted after {date_str}")
 
         # Fetch new listings
-        new_listings, all_listings = await github_client.get_new_listings(last_scrape)
+        new_listings, all_listings = await github_client.get_new_listings(last_scrape, start_timestamp)
 
         print(f"[Scraper] Found {len(new_listings.summer)} new summer internships")
         print(f"[Scraper] Found {len(new_listings.offseason)} new off-season internships")

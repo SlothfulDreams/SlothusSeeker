@@ -1,6 +1,6 @@
 """GitHub client for fetching internship listings."""
 import aiohttp
-from typing import List, Dict
+from typing import List, Dict, Optional
 from src.config.settings import GITHUB_REPO_URL, GITHUB_TOKEN
 from src.scraper.data_models import Internship, ScrapedData
 
@@ -14,8 +14,11 @@ class GitHubClient:
         if GITHUB_TOKEN:
             self.headers["Authorization"] = f"token {GITHUB_TOKEN}"
 
-    async def fetch_listings(self) -> ScrapedData:
+    async def fetch_listings(self, start_timestamp: Optional[int] = None) -> ScrapedData:
         """Fetch and parse listings from GitHub.
+
+        Args:
+            start_timestamp: Only include internships posted after this timestamp
 
         Returns:
             ScrapedData object with summer and offseason listings separated
@@ -38,6 +41,10 @@ class GitHubClient:
                 if not internship.should_be_posted():
                     continue
 
+                # Filter by date if start_timestamp is set
+                if start_timestamp and internship.date_posted < start_timestamp:
+                    continue
+
                 # Categorize by term
                 if internship.is_summer:
                     scraped_data.summer.append(internship)
@@ -51,16 +58,21 @@ class GitHubClient:
 
         return scraped_data
 
-    async def get_new_listings(self, last_scrape_ids: Dict[str, set]) -> ScrapedData:
+    async def get_new_listings(
+        self,
+        last_scrape_ids: Dict[str, set],
+        start_timestamp: Optional[int] = None
+    ) -> tuple[ScrapedData, ScrapedData]:
         """Get only new listings that weren't in the last scrape.
 
         Args:
             last_scrape_ids: Dict with 'summer' and 'offseason' keys containing sets of UUIDs
+            start_timestamp: Only include internships posted after this timestamp
 
         Returns:
-            ScrapedData with only new internships
+            Tuple of (new_data, all_listings)
         """
-        all_listings = await self.fetch_listings()
+        all_listings = await self.fetch_listings(start_timestamp)
 
         # Filter out already-posted listings
         new_data = ScrapedData()

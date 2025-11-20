@@ -91,7 +91,8 @@ All commands are slash commands (`/command`):
 - `/set_summer_channel <channel>` - Set channel for Summer 2026 internships
 - `/set_offseason_channel <channel>` - Set channel for Fall/Winter/Spring internships
 - `/set_scrape_interval <hours>` - Set how often to scrape for new internships (0.5-168 hours)
-- `/view_config` - View current channel configuration and scrape interval
+- `/set_start_date <days_back>` - Set how far back to scrape internships (1-365 days)
+- `/view_config` - View current channel configuration, interval, and start date
 - `/scrape_now` - Manually trigger an internship scrape
 
 ## Usage Example
@@ -99,9 +100,12 @@ All commands are slash commands (`/command`):
 1. Invite the bot to your Discord server
 2. Run `/set_summer_channel #summer-internships`
 3. Run `/set_offseason_channel #offseason-jobs`
-4. (Optional) Run `/set_scrape_interval 3` to scrape every 3 hours instead of default 6
-5. Wait for the bot to scrape (or run `/scrape_now`)
-6. New internships will be posted automatically!
+4. **IMPORTANT**: Run `/set_start_date 30` to only scrape internships from the last 30 days
+   - This prevents the bot from posting all 11,000+ historical internships on first run!
+   - Adjust the number based on your needs (e.g., 7, 14, 30, 60 days)
+5. (Optional) Run `/set_scrape_interval 3` to scrape every 3 hours instead of default 6
+6. Wait for the bot to scrape (or run `/scrape_now`)
+7. New internships will be posted automatically!
 
 ## Project Structure
 
@@ -137,6 +141,12 @@ Both files persist across restarts and are gitignored.
 
 ## Filtering Logic
 
+**Date Filtering:**
+- Use `/set_start_date <days_back>` to only scrape internships posted after a certain date
+- Prevents flooding channels with old/expired internships on first run
+- Recommended: Set to 30-60 days for a good balance
+- If not set, bot will scrape all internships (11,000+!)
+
 **Summer Channel:**
 - Receives internships with "Summer" in the term field
 - Examples: Summer 2026, Summer 2027
@@ -148,6 +158,7 @@ Both files persist across restarts and are gitignored.
 **Both Channels:**
 - Only active internships (`active: true`)
 - Only visible internships (`is_visible: true`)
+- Only internships posted after the start date (if configured)
 
 ## Troubleshooting
 

@@ -87,13 +87,14 @@ def create_stats_embed(summer_count: int, offseason_count: int) -> discord.Embed
     return embed
 
 
-def create_config_embed(guild_config: dict, guild_name: str, scrape_interval: float = None) -> discord.Embed:
+def create_config_embed(guild_config: dict, guild_name: str, scrape_interval: float = None, start_timestamp: int = None) -> discord.Embed:
     """Create an embed showing current configuration.
 
     Args:
         guild_config: Configuration dictionary for the guild
         guild_name: Name of the guild
         scrape_interval: Current scrape interval in hours (optional)
+        start_timestamp: Start timestamp for filtering (optional)
 
     Returns:
         Discord Embed object
@@ -130,6 +131,21 @@ def create_config_embed(guild_config: dict, guild_name: str, scrape_interval: fl
         embed.add_field(
             name="⏰ Scrape Interval",
             value=interval_str,
+            inline=False
+        )
+
+    if start_timestamp is not None:
+        from datetime import datetime
+        date_str = datetime.fromtimestamp(start_timestamp).strftime("%B %d, %Y")
+        embed.add_field(
+            name="📅 Scraping From",
+            value=f"Internships posted after {date_str}",
+            inline=False
+        )
+    else:
+        embed.add_field(
+            name="📅 Scraping From",
+            value="All dates (no filter set)",
             inline=False
         )
 
