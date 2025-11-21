@@ -126,7 +126,11 @@ def create_config_embed(guild_config: dict, guild_name: str, scrape_interval: fl
         elif scrape_interval == 1:
             interval_str = "1 hour"
         else:
-            interval_str = f"{scrape_interval} hours"
+            # Show as integer if it's a whole number
+            if scrape_interval == int(scrape_interval):
+                interval_str = f"{int(scrape_interval)} hours"
+            else:
+                interval_str = f"{scrape_interval} hours"
 
         embed.add_field(
             name="⏰ Scrape Interval",
