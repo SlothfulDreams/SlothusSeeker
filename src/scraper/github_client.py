@@ -23,6 +23,7 @@ class GitHubClient:
         Returns:
             ScrapedData object with summer and offseason listings separated
         """
+        # Fetch data from GitHub
         async with aiohttp.ClientSession() as session:
             async with session.get(self.url, headers=self.headers) as response:
                 if response.status != 200:
