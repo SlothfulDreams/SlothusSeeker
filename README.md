@@ -10,6 +10,7 @@ A Discord bot that automatically scrapes internship listings from [SimplifyJobs/
 - 🚫 **Deduplication**: Tracks posted internships to avoid spam
 - ⚡ **Slash Commands**: Modern Discord slash commands for easy configuration
 - 📊 **Rich Embeds**: Beautiful formatted internship posts with all details
+- ⚡ **Performance Optimized**: Stops parsing early when hitting old entries (assumes newest-first sorting)
 
 ## Prerequisites
 

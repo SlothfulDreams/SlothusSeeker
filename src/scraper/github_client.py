@@ -32,18 +32,25 @@ class GitHubClient:
 
         # Parse and categorize internships
         scraped_data = ScrapedData()
+        entries_processed = 0
+        entries_skipped_old = 0
 
         for item in data:
             try:
                 internship = Internship(**item)
+                entries_processed += 1
 
                 # Only process active and visible internships
                 if not internship.should_be_posted():
                     continue
 
-                # Filter by date if start_timestamp is set
+                # OPTIMIZATION: Stop processing if we hit old entries
+                # Assumes listings.json is sorted newest-first by date_posted
                 if start_timestamp and internship.date_posted < start_timestamp:
-                    continue
+                    entries_skipped_old = len(data) - entries_processed
+                    print(f"[Scraper] Stopping early: hit entries older than {start_timestamp}")
+                    print(f"[Scraper] Processed {entries_processed} entries, skipped {entries_skipped_old} old entries")
+                    break  # All remaining entries will be even older
 
                 # Categorize by term
                 if internship.is_summer:
@@ -55,6 +62,9 @@ class GitHubClient:
                 # Skip invalid entries
                 print(f"Warning: Failed to parse listing: {e}")
                 continue
+
+        if entries_skipped_old == 0:
+            print(f"[Scraper] Processed all {entries_processed} entries")
 
         return scraped_data
 
