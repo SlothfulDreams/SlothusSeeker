@@ -1,10 +1,16 @@
 """Background tasks for periodic scraping."""
+
 import asyncio
 from typing import Optional
+
 from discord.ext import commands, tasks
-from src.scraper.github_client import GitHubClient
-from src.config.config_manager import ConfigManager
+
 from src.bot.embeds import create_internship_embed
+from src.config.config_manager import ConfigManager
+from src.scraper.github_client import GitHubClient
+from src.utils.logger import setup_logger
+
+logger = setup_logger(__name__)
 
 
 async def scrape_and_post(bot: commands.Bot, config_manager: ConfigManager):
@@ -14,7 +20,7 @@ async def scrape_and_post(bot: commands.Bot, config_manager: ConfigManager):
         bot: Discord bot instance
         config_manager: Configuration manager instance
     """
-    print("[Scraper] Starting scrape...")
+    logger.info("Starting scrape...")
 
     try:
         # Initialize GitHub client
@@ -26,14 +32,17 @@ async def scrape_and_post(bot: commands.Bot, config_manager: ConfigManager):
 
         if start_timestamp:
             from datetime import datetime
+
             date_str = datetime.fromtimestamp(start_timestamp).strftime("%Y-%m-%d")
-            print(f"[Scraper] Filtering internships posted after {date_str}")
+            logger.info(f"Filtering internships posted after {date_str}")
 
         # Fetch new listings
-        new_listings, all_listings = await github_client.get_new_listings(last_scrape, start_timestamp)
+        new_listings, all_listings = await github_client.get_new_listings(
+            last_scrape, start_timestamp
+        )
 
-        print(f"[Scraper] Found {len(new_listings.summer)} new summer internships")
-        print(f"[Scraper] Found {len(new_listings.offseason)} new off-season internships")
+        logger.info(f"Found {len(new_listings.summer)} new summer internships")
+        logger.info(f"Found {len(new_listings.offseason)} new off-season internships")
 
         # Post summer internships
         summer_channels = config_manager.get_all_channels("summer")
@@ -46,7 +55,9 @@ async def scrape_and_post(bot: commands.Bot, config_manager: ConfigManager):
                         await channel.send(embed=embed)
                         await asyncio.sleep(1)  # Rate limit prevention
                     except Exception as e:
-                        print(f"[Scraper] Error posting to channel {channel_id}: {e}")
+                        logger.error(
+                            f"Error posting to channel {channel_id}: {e}", exc_info=True
+                        )
 
         # Post off-season internships
         offseason_channels = config_manager.get_all_channels("offseason")
@@ -62,15 +73,15 @@ async def scrape_and_post(bot: commands.Bot, config_manager: ConfigManager):
                         print(f"[Scraper] Error posting to channel {channel_id}: {e}")
 
         # Update last scrape tracking
-        config_manager.update_last_scrape(
+        await config_manager.update_last_scrape(
             summer_ids=all_listings.get_all_ids("summer"),
-            offseason_ids=all_listings.get_all_ids("offseason")
+            offseason_ids=all_listings.get_all_ids("offseason"),
         )
 
-        print("[Scraper] Scrape completed successfully")
+        logger.info("Scrape completed successfully")
 
     except Exception as e:
-        print(f"[Scraper] Error during scrape: {e}")
+        logger.error(f"Error during scrape: {e}", exc_info=True)
         raise
 
 
@@ -82,30 +93,26 @@ class ScraperTasks(commands.Cog):
         self.config_manager = config_manager
         # Get initial interval from config
         interval_hours = self.config_manager.get_scrape_interval()
-        self._start_scraper(interval_hours)
-
-    def _start_scraper(self, hours: float):
-        """Start the scraper task with a specific interval."""
-        # Create a new loop with the specified interval
-        @tasks.loop(hours=hours)
-        async def scrape_task():
-            """Periodic scraping task."""
-            await scrape_and_post(self.bot, self.config_manager)
-
-        @scrape_task.before_loop
-        async def before_scrape_task():
-            """Wait for bot to be ready before starting tasks."""
-            await self.bot.wait_until_ready()
-            print(f"[Scraper] Starting periodic scraping (every {hours} hours)")
-
-        # Store the task
-        self.scrape_task = scrape_task
+        logger.info(f"Initializing scheduler with interval: {interval_hours} hours")
+        # Set initial interval and start the task
+        self.scrape_task.change_interval(hours=interval_hours)
         self.scrape_task.start()
+
+    @tasks.loop(hours=6.0)  # Default interval, will be changed in __init__
+    async def scrape_task(self):
+        """Periodic scraping task."""
+        await scrape_and_post(self.bot, self.config_manager)
+
+    @scrape_task.before_loop
+    async def before_scrape_task(self):
+        """Wait for bot to be ready before starting tasks."""
+        await self.bot.wait_until_ready()
+        current_interval = self.scrape_task.hours
+        logger.info(f"Starting periodic scraping (every {current_interval} hours)")
 
     def cog_unload(self):
         """Stop tasks when cog is unloaded."""
-        if hasattr(self, 'scrape_task'):
-            self.scrape_task.cancel()
+        self.scrape_task.cancel()
 
     async def restart_scraper(self, new_interval_hours: float):
         """Restart the scraper task with a new interval.
@@ -113,14 +120,13 @@ class ScraperTasks(commands.Cog):
         Args:
             new_interval_hours: New interval in hours
         """
-        print(f"[Scraper] Restarting with new interval: {new_interval_hours} hours")
+        logger.info(
+            f"Restarting scheduler with new interval: {new_interval_hours} hours"
+        )
 
-        # Cancel existing task
-        if hasattr(self, 'scrape_task'):
-            self.scrape_task.cancel()
-
-        # Start new task with new interval
-        self._start_scraper(new_interval_hours)
+        # Change interval and restart the task
+        self.scrape_task.change_interval(hours=new_interval_hours)
+        self.scrape_task.restart()
 
 
 def get_scraper_cog(bot: commands.Bot) -> Optional[ScraperTasks]:

@@ -1,8 +1,15 @@
 """Main Discord bot implementation."""
+
+import os
+
 import discord
 from discord.ext import commands
-from src.config.settings import DISCORD_BOT_TOKEN
+
 from src.config.config_manager import ConfigManager
+from src.config.settings import DISCORD_BOT_TOKEN
+from src.utils.logger import setup_logger
+
+logger = setup_logger(__name__)
 
 
 class InternshipBot(commands.Bot):
@@ -15,7 +22,7 @@ class InternshipBot(commands.Bot):
         super().__init__(
             command_prefix="!",  # Fallback prefix, mainly using slash commands
             intents=intents,
-            help_command=None
+            help_command=None,
         )
 
         self.config_manager = config_manager
@@ -24,22 +31,38 @@ class InternshipBot(commands.Bot):
         """Setup hook called when the bot starts."""
         # Load commands
         from src.bot.commands import config as config_commands
+
         await config_commands.setup(self, self.config_manager)
 
         # Load scheduler
         from src.scheduler import tasks
+
         await tasks.setup(self, self.config_manager)
 
         # Sync commands with Discord
-        print("[Bot] Syncing commands...")
+        logger.info("Syncing commands...")
+
+        # 1. Sync to test guild (instant - for development/testing)
+        test_guild_id = os.getenv("TEST_GUILD_ID")
+        if test_guild_id:
+            try:
+                guild_id = int(test_guild_id)
+                guild = discord.Object(id=guild_id)
+                self.tree.copy_global_to(guild=guild)
+                await self.tree.sync(guild=guild)
+                logger.info(f"Commands synced to test guild {guild_id} (instant)")
+            except ValueError:
+                logger.warning(f"Invalid TEST_GUILD_ID: {test_guild_id}")
+
+        # 2. Also sync globally (for all other servers)
         await self.tree.sync()
-        print("[Bot] Commands synced!")
+        logger.info("Commands synced globally (may take up to 1 hour)")
 
     async def on_ready(self):
         """Called when the bot is ready."""
-        print(f"[Bot] Logged in as {self.user} (ID: {self.user.id})")
-        print(f"[Bot] Connected to {len(self.guilds)} guild(s)")
-        print("[Bot] Bot is ready!")
+        logger.info(f"Logged in as {self.user} (ID: {self.user.id})")
+        logger.info(f"Connected to {len(self.guilds)} guild(s)")
+        logger.info("Bot is ready!")
 
     async def on_guild_join(self, guild: discord.Guild):
         """Called when the bot joins a new guild."""
