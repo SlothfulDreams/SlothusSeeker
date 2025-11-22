@@ -42,21 +42,30 @@ class InternshipBot(commands.Bot):
         # Sync commands with Discord
         logger.info("Syncing commands...")
 
-        # 1. Sync to test guild (instant - for development/testing)
+        # Check if in development mode (test guild specified)
         test_guild_id = os.getenv("TEST_GUILD_ID")
         if test_guild_id:
+            # Development mode: sync to test guild only (instant, no duplicates)
             try:
                 guild_id = int(test_guild_id)
                 guild = discord.Object(id=guild_id)
                 self.tree.copy_global_to(guild=guild)
                 await self.tree.sync(guild=guild)
-                logger.info(f"Commands synced to test guild {guild_id} (instant)")
+                logger.info(
+                    f"Commands synced to test guild {guild_id} ONLY (development mode)"
+                )
             except ValueError:
-                logger.warning(f"Invalid TEST_GUILD_ID: {test_guild_id}")
-
-        # 2. Also sync globally (for all other servers)
-        await self.tree.sync()
-        logger.info("Commands synced globally (may take up to 1 hour)")
+                logger.warning(
+                    f"Invalid TEST_GUILD_ID: {test_guild_id}, falling back to global sync"
+                )
+                await self.tree.sync()
+                logger.info("Commands synced globally")
+        else:
+            # Production mode: sync globally
+            await self.tree.sync()
+            logger.info(
+                "Commands synced globally (production mode, may take up to 1 hour)"
+            )
 
     async def on_ready(self):
         """Called when the bot is ready."""
