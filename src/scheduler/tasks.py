@@ -189,9 +189,17 @@ class ScraperTasks(commands.Cog):
         self.scrape_task.change_interval(hours=interval_hours)
         self.scrape_task.start()
 
-    @tasks.loop(hours=6.0)  # Default interval, will be changed in __init__
+    @tasks.loop(hours=1.0)  # Default interval, will be changed in __init__
     async def scrape_task(self):
         """Periodic scraping task."""
+        # Check if any channels are configured before scraping
+        summer_channels = self.config_manager.get_all_channels("summer")
+        offseason_channels = self.config_manager.get_all_channels("offseason")
+
+        if not summer_channels and not offseason_channels:
+            logger.info("No channels configured, skipping scheduled scrape")
+            return
+
         await scrape_and_post(self.bot, self.config_manager)
 
     @scrape_task.before_loop
