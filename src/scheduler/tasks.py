@@ -85,6 +85,97 @@ async def scrape_and_post(bot: commands.Bot, config_manager: ConfigManager):
         raise
 
 
+async def scrape_and_post_with_stats(
+    bot: commands.Bot, config_manager: ConfigManager
+) -> dict:
+    """Scrape internships and post new ones with statistics tracking.
+
+    Args:
+        bot: Discord bot instance
+        config_manager: Configuration manager instance
+
+    Returns:
+        Dictionary with statistics: summer_posted, offseason_posted, total_new, errors
+    """
+    logger.info("Starting scrape with stats tracking...")
+
+    stats = {"summer_posted": 0, "offseason_posted": 0, "total_new": 0, "errors": 0}
+
+    try:
+        # Initialize GitHub client
+        github_client = GitHubClient()
+
+        # Get last scrape data and start timestamp
+        last_scrape = config_manager.get_last_scrape()
+        start_timestamp = config_manager.get_scrape_start_timestamp()
+
+        if start_timestamp:
+            from datetime import datetime
+
+            date_str = datetime.fromtimestamp(start_timestamp).strftime("%Y-%m-%d")
+            logger.info(f"Filtering internships posted after {date_str}")
+
+        # Fetch new listings
+        new_listings, all_listings = await github_client.get_new_listings(
+            last_scrape, start_timestamp
+        )
+
+        stats["total_new"] = len(new_listings.summer) + len(new_listings.offseason)
+
+        logger.info(f"Found {len(new_listings.summer)} new summer internships")
+        logger.info(f"Found {len(new_listings.offseason)} new off-season internships")
+
+        # Post summer internships
+        summer_channels = config_manager.get_all_channels("summer")
+        for channel_id in summer_channels:
+            channel = bot.get_channel(channel_id)
+            if channel:
+                for internship in new_listings.summer:
+                    embed = create_internship_embed(internship)
+                    try:
+                        await channel.send(embed=embed)
+                        stats["summer_posted"] += 1
+                        await asyncio.sleep(1)  # Rate limit prevention
+                    except Exception as e:
+                        stats["errors"] += 1
+                        logger.error(
+                            f"Error posting to channel {channel_id}: {e}", exc_info=True
+                        )
+
+        # Post off-season internships
+        offseason_channels = config_manager.get_all_channels("offseason")
+        for channel_id in offseason_channels:
+            channel = bot.get_channel(channel_id)
+            if channel:
+                for internship in new_listings.offseason:
+                    embed = create_internship_embed(internship)
+                    try:
+                        await channel.send(embed=embed)
+                        stats["offseason_posted"] += 1
+                        await asyncio.sleep(1)  # Rate limit prevention
+                    except Exception as e:
+                        stats["errors"] += 1
+                        logger.error(
+                            f"Error posting to channel {channel_id}: {e}", exc_info=True
+                        )
+
+        # Update last scrape tracking
+        await config_manager.update_last_scrape(
+            summer_ids=all_listings.get_all_ids("summer"),
+            offseason_ids=all_listings.get_all_ids("offseason"),
+        )
+
+        logger.info(
+            f"Scrape completed: {stats['summer_posted']} summer, {stats['offseason_posted']} offseason posted"
+        )
+
+    except Exception as e:
+        logger.error(f"Error during scrape: {e}", exc_info=True)
+        raise
+
+    return stats
+
+
 class ScraperTasks(commands.Cog):
     """Cog for background scraping tasks."""
 
