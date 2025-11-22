@@ -42,9 +42,8 @@ class ConfigCommands(commands.Cog):
             )
             return
 
-        # Check if this is the first channel being configured
+        # Check if offseason channel already exists
         offseason_channels = self.config_manager.get_all_channels("offseason")
-        is_first_channel = len(offseason_channels) == 0
 
         self.config_manager.set_channel(
             guild_id=interaction.guild_id, channel_type="summer", channel_id=channel.id
@@ -54,12 +53,12 @@ class ConfigCommands(commands.Cog):
             f"✅ Summer internships will be posted to {channel.mention}", ephemeral=True
         )
 
-        # Trigger immediate scrape if this is the first channel configured
-        if is_first_channel:
+        # Trigger immediate scrape if BOTH channels are now configured
+        if len(offseason_channels) > 0:
             from src.scheduler.tasks import scrape_and_post
 
             await interaction.followup.send(
-                "🔄 First channel configured! Triggering initial scrape...",
+                "🔄 Both channels configured! Triggering initial scrape...",
                 ephemeral=True,
             )
             await scrape_and_post(self.bot, self.config_manager)
@@ -95,9 +94,8 @@ class ConfigCommands(commands.Cog):
             )
             return
 
-        # Check if this is the first channel being configured
+        # Check if summer channel already exists
         summer_channels = self.config_manager.get_all_channels("summer")
-        is_first_channel = len(summer_channels) == 0
 
         self.config_manager.set_channel(
             guild_id=interaction.guild_id,
@@ -110,12 +108,12 @@ class ConfigCommands(commands.Cog):
             ephemeral=True,
         )
 
-        # Trigger immediate scrape if this is the first channel configured
-        if is_first_channel:
+        # Trigger immediate scrape if BOTH channels are now configured
+        if len(summer_channels) > 0:
             from src.scheduler.tasks import scrape_and_post
 
             await interaction.followup.send(
-                "🔄 First channel configured! Triggering initial scrape...",
+                "🔄 Both channels configured! Triggering initial scrape...",
                 ephemeral=True,
             )
             await scrape_and_post(self.bot, self.config_manager)

@@ -66,7 +66,7 @@ The bot initialization follows a specific lifecycle:
 Two-layer configuration architecture:
 
 **Layer 1: Global Settings** (`config.json` → `"global"` key)
-- `scrape_interval_hours`: How often to scrape (default: 6)
+- `scrape_interval_hours`: How often to scrape (default: 1)
 - `scrape_start_timestamp`: Unix timestamp for date filtering (default: 3 days ago)
 
 **Layer 2: Per-Guild Settings** (`config.json` → guild ID keys)
@@ -140,6 +140,33 @@ The scheduler can restart with a new interval **without restarting the bot**:
 
 **Optimization**: Parser stops early when `date_posted < start_timestamp` (assumes newest-first sorting)
 
+### Scheduler Behavior and Channel Validation
+
+**Important**: The scheduler requires **BOTH** channel types to be configured before running:
+
+**On Bot Startup**:
+1. Scheduler starts with configured interval (default: 1 hour)
+2. Before each scrape, checks if **BOTH** summer and offseason channels are configured
+3. If **either channel missing**: Skips scrape execution, logs message, prevents `last_scrape.json` population
+4. If **both channels exist**: Proceeds with normal scrape and post flow
+
+**On Channel Setup**:
+1. User runs `/set_summer_channel` or `/set_offseason_channel`
+2. Command checks if the **other channel type** is already configured
+3. If **both channels now configured**: Immediately triggers `scrape_and_post()` after saving the channel
+4. Posts all internships from the configured time window (default: last 3 days)
+5. Updates `last_scrape.json` with posted internship IDs
+6. If **only one channel type configured**: Waits for the other channel to be set before scraping
+
+**Why This Matters**:
+- Prevents scheduler from scraping before BOTH channels are configured
+- Avoids populating `last_scrape.json` prematurely (which would mark internships as "already posted" when no posting occurred)
+- Ensures all internships can be properly categorized and posted (summer to summer channel, offseason to offseason channel)
+- Prevents partial posting where only one category gets posted
+- Subsequent scrapes only post NEW internships (deduplication works correctly)
+
+**Implementation**: See `src/scheduler/tasks.py` (channel validation in `scrape_task()`) and `src/bot/commands/config.py` (both-channel trigger in `set_summer_channel()` and `set_offseason_channel()`)
+
 ## Important Implementation Details
 
 ### Discord Privileged Intents
@@ -199,6 +226,8 @@ for channel_id in summer_channels:
 3. **Duplicate posts**: Verify `last_scrape.json` is being updated after each scrape
 4. **Missing internships**: Check `scrape_start_timestamp` - might be filtering out recent posts
 5. **Parser stopping early**: Assumes newest-first sorting from GitHub - verify this hasn't changed
+6. **`/scrape_now` returns 0 listings**: Check if scheduler already ran before channels were configured - clear `last_scrape.json` if needed
+7. **Scheduler ran before channel setup**: If bot starts without configured channels, it will skip scraping. Configure channels to trigger first scrape.
 
 ## Extension Points
 
