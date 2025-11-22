@@ -4,7 +4,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from src.bot.embeds import create_config_embed
+from src.bot.embeds import create_config_embed, create_internship_embed
 from src.config.config_manager import ConfigManager
 
 
@@ -152,44 +152,34 @@ class ConfigCommands(commands.Cog):
             summer_internships = all_listings.summer[:5]
             offseason_internships = all_listings.offseason[:5]
 
-            # Build response message
-            message_parts = []
-            message_parts.append("🔍 **Test Scrape Results**\n")
-            message_parts.append(
+            # Build header message
+            header = (
+                f"🔍 **Test Scrape Results**\n"
                 f"📊 Total found: {len(all_listings.summer)} summer, {len(all_listings.offseason)} off-season\n"
+                f"Showing 5 most recent from each category:"
             )
 
-            if summer_internships:
-                message_parts.append("\n**☀️ Summer Internships (5 most recent):**")
-                for i, internship in enumerate(summer_internships, 1):
-                    message_parts.append(
-                        f"{i}. **{internship.company_name}** - {internship.title}\n"
-                        f"   📍 {internship.location_str}\n"
-                        f"   📅 Posted: {internship.posted_date_str}\n"
-                        f"   🔗 {internship.url}\n"
-                    )
+            # Build embeds list (Discord allows up to 10 embeds per message)
+            embeds = []
+
+            # Add summer internship embeds
+            for internship in summer_internships:
+                embeds.append(create_internship_embed(internship))
+
+            # Add off-season internship embeds
+            for internship in offseason_internships:
+                embeds.append(create_internship_embed(internship))
+
+            # Send header message first
+            await interaction.followup.send(header, ephemeral=True)
+
+            # Send embeds if we have any
+            if embeds:
+                await interaction.followup.send(embeds=embeds, ephemeral=True)
             else:
-                message_parts.append("\n**☀️ Summer Internships:** None found")
-
-            if offseason_internships:
-                message_parts.append("\n**🍂 Off-Season Internships (5 most recent):**")
-                for i, internship in enumerate(offseason_internships, 1):
-                    message_parts.append(
-                        f"{i}. **{internship.company_name}** - {internship.title}\n"
-                        f"   📍 {internship.location_str}\n"
-                        f"   📅 Posted: {internship.posted_date_str}\n"
-                        f"   🔗 {internship.url}\n"
-                    )
-            else:
-                message_parts.append("\n**🍂 Off-Season Internships:** None found")
-
-            message = "\n".join(message_parts)
-
-            # Discord has a 2000 character limit, so truncate if needed
-            if len(message) > 2000:
-                message = message[:1997] + "..."
-
-            await interaction.followup.send(message, ephemeral=True)
+                await interaction.followup.send(
+                    "No internships found matching your criteria.", ephemeral=True
+                )
 
             # Close the client session
             await github_client.close()
