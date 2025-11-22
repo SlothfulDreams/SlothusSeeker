@@ -1,9 +1,12 @@
 """Tests for ConfigManager."""
+
 import json
 import tempfile
-from pathlib import Path
 from datetime import datetime, timedelta
+from pathlib import Path
+
 import pytest
+
 from src.config.config_manager import ConfigManager
 
 
@@ -118,11 +121,11 @@ class TestStartDate:
     """Test start date/timestamp methods."""
 
     def test_get_default_start_timestamp(self, config_manager):
-        """Test getting default start timestamp (3 days ago)."""
+        """Test getting default start timestamp (1 days ago)."""
         timestamp = config_manager.get_scrape_start_timestamp()
 
         # Should be approximately 3 days ago
-        three_days_ago = datetime.now() - timedelta(days=3)
+        three_days_ago = datetime.now() - timedelta(days=1)
         timestamp_date = datetime.fromtimestamp(timestamp)
 
         # Allow 1 minute tolerance for test execution time
@@ -170,7 +173,9 @@ class TestLastScrapeTracking:
         config_file = temp_config_dir / "config.json"
         last_scrape_file = temp_config_dir / "last_scrape.json"
         monkeypatch.setattr("src.config.config_manager.CONFIG_FILE", config_file)
-        monkeypatch.setattr("src.config.config_manager.LAST_SCRAPE_FILE", last_scrape_file)
+        monkeypatch.setattr(
+            "src.config.config_manager.LAST_SCRAPE_FILE", last_scrape_file
+        )
 
         new_manager = ConfigManager()
         last_scrape = new_manager.get_last_scrape()

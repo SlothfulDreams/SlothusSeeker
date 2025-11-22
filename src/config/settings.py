@@ -1,6 +1,8 @@
 """Application settings loaded from environment variables."""
+
 import os
 from pathlib import Path
+
 from dotenv import load_dotenv
 
 # Load environment variables
@@ -15,7 +17,7 @@ if not DISCORD_BOT_TOKEN:
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")  # Optional
 GITHUB_REPO_URL = os.getenv(
     "GITHUB_REPO_URL",
-    "https://raw.githubusercontent.com/SimplifyJobs/Summer2026-Internships/dev/.github/scripts/listings.json"
+    "https://raw.githubusercontent.com/SimplifyJobs/Summer2026-Internships/dev/.github/scripts/listings.json",
 )
 
 # Scraping Configuration

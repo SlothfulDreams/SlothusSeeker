@@ -42,6 +42,10 @@ class ConfigCommands(commands.Cog):
             )
             return
 
+        # Check if this is the first channel being configured
+        offseason_channels = self.config_manager.get_all_channels("offseason")
+        is_first_channel = len(offseason_channels) == 0
+
         self.config_manager.set_channel(
             guild_id=interaction.guild_id, channel_type="summer", channel_id=channel.id
         )
@@ -49,6 +53,20 @@ class ConfigCommands(commands.Cog):
         await interaction.response.send_message(
             f"✅ Summer internships will be posted to {channel.mention}", ephemeral=True
         )
+
+        # Trigger immediate scrape if this is the first channel configured
+        if is_first_channel:
+            from src.scheduler.tasks import scrape_and_post
+
+            await interaction.followup.send(
+                "🔄 First channel configured! Triggering initial scrape...",
+                ephemeral=True,
+            )
+            await scrape_and_post(self.bot, self.config_manager)
+            await interaction.followup.send(
+                "✅ Initial scrape completed! Internships have been posted.",
+                ephemeral=True,
+            )
 
     @app_commands.command(
         name="set_offseason_channel",
@@ -77,6 +95,10 @@ class ConfigCommands(commands.Cog):
             )
             return
 
+        # Check if this is the first channel being configured
+        summer_channels = self.config_manager.get_all_channels("summer")
+        is_first_channel = len(summer_channels) == 0
+
         self.config_manager.set_channel(
             guild_id=interaction.guild_id,
             channel_type="offseason",
@@ -87,6 +109,20 @@ class ConfigCommands(commands.Cog):
             f"✅ Off-season internships (Fall/Winter/Spring) will be posted to {channel.mention}",
             ephemeral=True,
         )
+
+        # Trigger immediate scrape if this is the first channel configured
+        if is_first_channel:
+            from src.scheduler.tasks import scrape_and_post
+
+            await interaction.followup.send(
+                "🔄 First channel configured! Triggering initial scrape...",
+                ephemeral=True,
+            )
+            await scrape_and_post(self.bot, self.config_manager)
+            await interaction.followup.send(
+                "✅ Initial scrape completed! Internships have been posted.",
+                ephemeral=True,
+            )
 
     @app_commands.command(
         name="view_config", description="View the current bot configuration"
