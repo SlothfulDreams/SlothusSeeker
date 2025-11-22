@@ -1,10 +1,14 @@
 """Entry point for the SlothusSeeker Discord bot."""
+
 from src.bot.bot import run_bot
+from src.utils.logger import setup_logger
+
+logger = setup_logger(__name__)
 
 
 def main():
     """Start the Discord bot."""
-    print("Starting SlothusSeeker Discord Bot...")
+    logger.info("Starting SlothusSeeker Discord Bot...")
     run_bot()
 
 

@@ -1,7 +1,10 @@
 """Manager for bot configuration stored in JSON files."""
+
+import asyncio
 import json
 from pathlib import Path
 from typing import Dict, Optional, Set
+
 from src.config.settings import CONFIG_FILE, LAST_SCRAPE_FILE, SCRAPE_INTERVAL_HOURS
 
 
@@ -11,6 +14,8 @@ class ConfigManager:
     def __init__(self):
         self.config_file = CONFIG_FILE
         self.last_scrape_file = LAST_SCRAPE_FILE
+        self._config_lock = asyncio.Lock()
+        self._scrape_lock = asyncio.Lock()
         self._ensure_files_exist()
 
     def _ensure_files_exist(self):
@@ -30,6 +35,17 @@ class ConfigManager:
         config = self.get_config()
         return config.get(str(guild_id), {})
 
+    def _atomic_write(self, file_path: Path, data: Dict):
+        """Write data to file atomically using temp file + rename.
+
+        Args:
+            file_path: Target file path
+            data: Data to write as JSON
+        """
+        temp_file = file_path.with_suffix(".tmp")
+        temp_file.write_text(json.dumps(data, indent=2))
+        temp_file.replace(file_path)
+
     def set_channel(self, guild_id: int, channel_type: str, channel_id: int):
         """Set a channel for a guild.
 
@@ -45,7 +61,7 @@ class ConfigManager:
             config[guild_key] = {}
 
         config[guild_key][f"{channel_type}_channel"] = channel_id
-        self.config_file.write_text(json.dumps(config, indent=2))
+        self._atomic_write(self.config_file, config)
 
     def get_all_channels(self, channel_type: str) -> list[int]:
         """Get all configured channels of a specific type across all guilds.
@@ -76,21 +92,19 @@ class ConfigManager:
         data = json.loads(self.last_scrape_file.read_text())
         return {
             "summer": set(data.get("summer", [])),
-            "offseason": set(data.get("offseason", []))
+            "offseason": set(data.get("offseason", [])),
         }
 
-    def update_last_scrape(self, summer_ids: Set[str], offseason_ids: Set[str]):
-        """Update last scrape tracking file.
+    async def update_last_scrape(self, summer_ids: Set[str], offseason_ids: Set[str]):
+        """Update last scrape tracking file with atomic write and lock.
 
         Args:
             summer_ids: Set of UUIDs for summer internships
             offseason_ids: Set of UUIDs for off-season internships
         """
-        data = {
-            "summer": list(summer_ids),
-            "offseason": list(offseason_ids)
-        }
-        self.last_scrape_file.write_text(json.dumps(data, indent=2))
+        async with self._scrape_lock:
+            data = {"summer": list(summer_ids), "offseason": list(offseason_ids)}
+            self._atomic_write(self.last_scrape_file, data)
 
     # Scrape Interval Methods
     def get_scrape_interval(self) -> float:
@@ -117,7 +131,7 @@ class ConfigManager:
             config["global"] = {}
 
         config["global"]["scrape_interval_hours"] = hours
-        self.config_file.write_text(json.dumps(config, indent=2))
+        self._atomic_write(self.config_file, config)
 
     # Start Date Methods
     def get_scrape_start_timestamp(self) -> int:
@@ -135,6 +149,7 @@ class ConfigManager:
 
         # Default: 3 days ago
         from datetime import datetime, timedelta
+
         default_start = datetime.now() - timedelta(days=3)
         return int(default_start.timestamp())
 
@@ -152,4 +167,4 @@ class ConfigManager:
             config["global"] = {}
 
         config["global"]["scrape_start_timestamp"] = timestamp
-        self.config_file.write_text(json.dumps(config, indent=2))
+        self._atomic_write(self.config_file, config)

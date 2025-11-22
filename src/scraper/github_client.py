@@ -1,8 +1,18 @@
 """GitHub client for fetching internship listings."""
+
+import asyncio
+import json
+from typing import Dict, List, Optional
+
 import aiohttp
-from typing import List, Dict, Optional
+
 from src.config.settings import GITHUB_REPO_URL, GITHUB_TOKEN
 from src.scraper.data_models import Internship, ScrapedData
+from src.scraper.exceptions import FetchError, NetworkError, ParseError, RateLimitError
+from src.utils.logger import setup_logger
+from src.utils.retry import retry_with_backoff
+
+logger = setup_logger(__name__)
 
 
 class GitHubClient:
@@ -13,8 +23,82 @@ class GitHubClient:
         self.headers = {}
         if GITHUB_TOKEN:
             self.headers["Authorization"] = f"token {GITHUB_TOKEN}"
+        self._session: Optional[aiohttp.ClientSession] = None
 
-    async def fetch_listings(self, start_timestamp: Optional[int] = None) -> ScrapedData:
+    async def _get_session(self) -> aiohttp.ClientSession:
+        """Get or create aiohttp session with timeout configuration.
+
+        Returns:
+            ClientSession instance with configured timeout
+        """
+        if self._session is None or self._session.closed:
+            timeout = aiohttp.ClientTimeout(total=30)  # 30 second timeout
+            self._session = aiohttp.ClientSession(headers=self.headers, timeout=timeout)
+        return self._session
+
+    async def close(self):
+        """Cleanup aiohttp session. Call this when done with the client."""
+        if self._session and not self._session.closed:
+            await self._session.close()
+            self._session = None
+
+    async def _fetch_data(self) -> List[Dict]:
+        """Fetch raw data from GitHub with retries.
+
+        Returns:
+            List of dictionaries containing internship data
+        """
+
+        async def _do_fetch():
+            session = await self._get_session()
+            async with session.get(self.url) as response:
+                if response.status == 429:
+                    raise RateLimitError("GitHub API rate limit exceeded")
+                elif response.status >= 500:
+                    raise FetchError(f"GitHub server error: HTTP {response.status}")
+                elif response.status != 200:
+                    raise FetchError(
+                        f"Failed to fetch listings: HTTP {response.status}"
+                    )
+
+                # Check content type and parse accordingly
+                content_type = response.headers.get("Content-Type", "")
+                logger.debug(f"Response Content-Type: {content_type}")
+
+                try:
+                    # GitHub raw URLs often return text/plain even for JSON files
+                    if "application/json" in content_type:
+                        # Direct JSON parsing
+                        data = await response.json()
+                    else:
+                        # Text response (common for raw GitHub URLs) - get text then parse
+                        text = await response.text()
+                        logger.debug(f"Received text response, length: {len(text)}")
+                        data = json.loads(text)
+
+                    return data
+                except json.JSONDecodeError as e:
+                    raise ParseError(f"Invalid JSON response: {e}")
+                except Exception as e:
+                    raise ParseError(f"Failed to parse response: {e}")
+
+        try:
+            return await retry_with_backoff(
+                _do_fetch,
+                max_retries=3,
+                exceptions=(
+                    NetworkError,
+                    FetchError,
+                    asyncio.TimeoutError,
+                    aiohttp.ClientError,
+                ),
+            )
+        except aiohttp.ClientError as e:
+            raise NetworkError(f"Network error: {e}")
+
+    async def fetch_listings(
+        self, start_timestamp: Optional[int] = None
+    ) -> ScrapedData:
         """Fetch and parse listings from GitHub.
 
         Args:
@@ -23,18 +107,16 @@ class GitHubClient:
         Returns:
             ScrapedData object with summer and offseason listings separated
         """
-        # Fetch data from GitHub
-        async with aiohttp.ClientSession() as session:
-            async with session.get(self.url, headers=self.headers) as response:
-                if response.status != 200:
-                    raise Exception(f"Failed to fetch listings: HTTP {response.status}")
-
-                data: List[Dict] = await response.json()
+        # Fetch data from GitHub with retry logic
+        try:
+            data = await self._fetch_data()
+        except asyncio.TimeoutError:
+            raise NetworkError("Request timed out after 30 seconds")
 
         # Parse and categorize internships
         scraped_data = ScrapedData()
         entries_processed = 0
-        entries_skipped_old = 0
+        entries_filtered = 0
 
         for item in data:
             try:
@@ -45,13 +127,10 @@ class GitHubClient:
                 if not internship.should_be_posted():
                     continue
 
-                # OPTIMIZATION: Stop processing if we hit old entries
-                # Assumes listings.json is sorted newest-first by date_posted
+                # Filter by date (but don't break - data is unsorted)
                 if start_timestamp and internship.date_posted < start_timestamp:
-                    entries_skipped_old = len(data) - entries_processed
-                    print(f"[Scraper] Stopping early: hit entries older than {start_timestamp}")
-                    print(f"[Scraper] Processed {entries_processed} entries, skipped {entries_skipped_old} old entries")
-                    break  # All remaining entries will be even older
+                    entries_filtered += 1
+                    continue  # Skip old entry, keep processing others
 
                 # Categorize by term
                 if internship.is_summer:
@@ -61,18 +140,23 @@ class GitHubClient:
 
             except Exception as e:
                 # Skip invalid entries
-                print(f"Warning: Failed to parse listing: {e}")
+                logger.warning(f"Failed to parse listing: {e}")
                 continue
 
-        if entries_skipped_old == 0:
-            print(f"[Scraper] Processed all {entries_processed} entries")
+        # Sort results by date (newest first) since GitHub data is unsorted
+        scraped_data.summer.sort(key=lambda x: x.date_posted, reverse=True)
+        scraped_data.offseason.sort(key=lambda x: x.date_posted, reverse=True)
+
+        logger.info(
+            f"Processed {entries_processed} entries, "
+            f"filtered {entries_filtered} old entries, "
+            f"found {len(scraped_data.summer)} summer + {len(scraped_data.offseason)} off-season"
+        )
 
         return scraped_data
 
     async def get_new_listings(
-        self,
-        last_scrape_ids: Dict[str, set],
-        start_timestamp: Optional[int] = None
+        self, last_scrape_ids: Dict[str, set], start_timestamp: Optional[int] = None
     ) -> tuple[ScrapedData, ScrapedData]:
         """Get only new listings that weren't in the last scrape.
 
