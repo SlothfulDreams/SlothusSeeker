@@ -112,16 +112,39 @@ class ConfigCommands(commands.Cog):
         await interaction.response.defer(ephemeral=True)
 
         try:
-            # Trigger the scrape task
-            # The actual scraping is handled by the scheduler
-            from src.scheduler.tasks import scrape_and_post
+            # Check if channels are configured
+            summer_channels = self.config_manager.get_all_channels("summer")
+            offseason_channels = self.config_manager.get_all_channels("offseason")
 
-            await scrape_and_post(self.bot, self.config_manager)
+            if not summer_channels and not offseason_channels:
+                await interaction.followup.send(
+                    "⚠️ No channels configured! Use `/set_summer_channel` and `/set_offseason_channel` first.",
+                    ephemeral=True,
+                )
+                return
 
-            await interaction.followup.send(
-                "✅ Manual scrape completed! Check the configured channels for new postings.",
-                ephemeral=True,
+            # Trigger the scrape task with stats
+            from src.scheduler.tasks import scrape_and_post_with_stats
+
+            stats = await scrape_and_post_with_stats(self.bot, self.config_manager)
+
+            # Build detailed response
+            response = "✅ **Scrape Complete**\n\n"
+            response += "📊 **Results:**\n"
+            response += f"• Summer internships posted: {stats['summer_posted']}\n"
+            response += (
+                f"• Off-season internships posted: {stats['offseason_posted']}\n"
             )
+            response += f"• Total new listings: {stats['total_new']}\n"
+
+            if stats["errors"] > 0:
+                response += f"\n⚠️ {stats['errors']} error(s) occurred while posting (check logs)"
+
+            if stats["total_new"] == 0:
+                response += "\n\n💡 No new internships found (all already posted or filtered by date)"
+
+            await interaction.followup.send(response, ephemeral=True)
+
         except Exception as e:
             await interaction.followup.send(
                 f"❌ Error during scrape: {str(e)}", ephemeral=True
