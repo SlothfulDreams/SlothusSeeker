@@ -42,6 +42,14 @@ class GitHubClient:
             await self._session.close()
             self._session = None
 
+    async def __aenter__(self):
+        """Async context manager entry."""
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        """Async context manager exit - ensures session cleanup."""
+        await self.close()
+
     async def _fetch_data(self) -> List[Dict]:
         """Fetch raw data from GitHub with retries.
 
