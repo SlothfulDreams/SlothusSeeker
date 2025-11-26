@@ -81,6 +81,18 @@ class InternshipBot(commands.Bot):
         """Called when the bot is removed from a guild."""
         print(f"[Bot] Removed from guild: {guild.name} (ID: {guild.id})")
 
+    async def close(self):
+        """Cleanup resources before shutdown."""
+        logger.info("Bot shutting down, cleaning up resources...")
+
+        # Cancel scheduler task if running
+        scraper_cog = self.get_cog("ScraperTasks")
+        if scraper_cog:
+            scraper_cog.scrape_task.cancel()
+            logger.info("Scheduler task cancelled")
+
+        await super().close()
+
 
 def create_bot() -> InternshipBot:
     """Create and configure the bot instance.

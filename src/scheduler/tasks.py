@@ -22,10 +22,10 @@ async def scrape_and_post(bot: commands.Bot, config_manager: ConfigManager):
     """
     logger.info("Starting scrape...")
 
-    try:
-        # Initialize GitHub client
-        github_client = GitHubClient()
+    # Initialize GitHub client outside try block to ensure cleanup in finally
+    github_client = GitHubClient()
 
+    try:
         # Get last scrape data and start timestamp
         last_scrape = config_manager.get_last_scrape()
         start_timestamp = config_manager.get_scrape_start_timestamp()
@@ -70,7 +70,9 @@ async def scrape_and_post(bot: commands.Bot, config_manager: ConfigManager):
                         await channel.send(embed=embed)
                         await asyncio.sleep(1)  # Rate limit prevention
                     except Exception as e:
-                        print(f"[Scraper] Error posting to channel {channel_id}: {e}")
+                        logger.error(
+                            f"Error posting to channel {channel_id}: {e}", exc_info=True
+                        )
 
         # Update last scrape tracking
         await config_manager.update_last_scrape(
@@ -83,6 +85,8 @@ async def scrape_and_post(bot: commands.Bot, config_manager: ConfigManager):
     except Exception as e:
         logger.error(f"Error during scrape: {e}", exc_info=True)
         raise
+    finally:
+        await github_client.close()
 
 
 async def scrape_and_post_with_stats(
@@ -101,10 +105,10 @@ async def scrape_and_post_with_stats(
 
     stats = {"summer_posted": 0, "offseason_posted": 0, "total_new": 0, "errors": 0}
 
-    try:
-        # Initialize GitHub client
-        github_client = GitHubClient()
+    # Initialize GitHub client outside try block to ensure cleanup in finally
+    github_client = GitHubClient()
 
+    try:
         # Get last scrape data and start timestamp
         last_scrape = config_manager.get_last_scrape()
         start_timestamp = config_manager.get_scrape_start_timestamp()
@@ -172,6 +176,8 @@ async def scrape_and_post_with_stats(
     except Exception as e:
         logger.error(f"Error during scrape: {e}", exc_info=True)
         raise
+    finally:
+        await github_client.close()
 
     return stats
 
