@@ -1,6 +1,7 @@
 """Background tasks for periodic scraping."""
 
 import asyncio
+from typing import Iterable
 from typing import Optional
 
 from discord.ext import commands, tasks
@@ -11,6 +12,44 @@ from src.scraper.github_client import GitHubClient
 from src.utils.logger import setup_logger
 
 logger = setup_logger(__name__)
+
+
+async def _post_internships(
+    bot: commands.Bot, channel_type: str, channels: list[int], internships: Iterable
+) -> tuple[int, int]:
+    """Post internship embeds to configured channels.
+
+    Args:
+        bot: Discord bot instance
+        channel_type: Either 'summer' or 'offseason'
+        channels: List of channel IDs to post to
+        internships: Iterable of internship models to post
+
+    Returns:
+        Tuple with (posted_count, error_count)
+    """
+    posted_count = 0
+    error_count = 0
+
+    for channel_id in channels:
+        channel = bot.get_channel(channel_id)
+        if not channel:
+            continue
+
+        for internship in internships:
+            embed = create_internship_embed(internship)
+            try:
+                await channel.send(embed=embed)
+                posted_count += 1
+                await asyncio.sleep(1)  # Rate limit prevention
+            except Exception as e:
+                error_count += 1
+                logger.error(
+                    f"Error posting {channel_type} internship to channel {channel_id}: {e}",
+                    exc_info=True,
+                )
+
+    return posted_count, error_count
 
 
 async def scrape_and_post(bot: commands.Bot, config_manager: ConfigManager):
@@ -44,35 +83,14 @@ async def scrape_and_post(bot: commands.Bot, config_manager: ConfigManager):
         logger.info(f"Found {len(new_listings.summer)} new summer internships")
         logger.info(f"Found {len(new_listings.offseason)} new off-season internships")
 
-        # Post summer internships
         summer_channels = config_manager.get_all_channels("summer")
-        for channel_id in summer_channels:
-            channel = bot.get_channel(channel_id)
-            if channel:
-                for internship in new_listings.summer:
-                    embed = create_internship_embed(internship)
-                    try:
-                        await channel.send(embed=embed)
-                        await asyncio.sleep(1)  # Rate limit prevention
-                    except Exception as e:
-                        logger.error(
-                            f"Error posting to channel {channel_id}: {e}", exc_info=True
-                        )
+        await _post_internships(bot, "summer", summer_channels, new_listings.summer)
 
         # Post off-season internships
         offseason_channels = config_manager.get_all_channels("offseason")
-        for channel_id in offseason_channels:
-            channel = bot.get_channel(channel_id)
-            if channel:
-                for internship in new_listings.offseason:
-                    embed = create_internship_embed(internship)
-                    try:
-                        await channel.send(embed=embed)
-                        await asyncio.sleep(1)  # Rate limit prevention
-                    except Exception as e:
-                        logger.error(
-                            f"Error posting to channel {channel_id}: {e}", exc_info=True
-                        )
+        await _post_internships(
+            bot, "offseason", offseason_channels, new_listings.offseason
+        )
 
         # Update last scrape tracking
         await config_manager.update_last_scrape(
@@ -131,37 +149,19 @@ async def scrape_and_post_with_stats(
 
         # Post summer internships
         summer_channels = config_manager.get_all_channels("summer")
-        for channel_id in summer_channels:
-            channel = bot.get_channel(channel_id)
-            if channel:
-                for internship in new_listings.summer:
-                    embed = create_internship_embed(internship)
-                    try:
-                        await channel.send(embed=embed)
-                        stats["summer_posted"] += 1
-                        await asyncio.sleep(1)  # Rate limit prevention
-                    except Exception as e:
-                        stats["errors"] += 1
-                        logger.error(
-                            f"Error posting to channel {channel_id}: {e}", exc_info=True
-                        )
+        posted, errors = await _post_internships(
+            bot, "summer", summer_channels, new_listings.summer
+        )
+        stats["summer_posted"] += posted
+        stats["errors"] += errors
 
         # Post off-season internships
         offseason_channels = config_manager.get_all_channels("offseason")
-        for channel_id in offseason_channels:
-            channel = bot.get_channel(channel_id)
-            if channel:
-                for internship in new_listings.offseason:
-                    embed = create_internship_embed(internship)
-                    try:
-                        await channel.send(embed=embed)
-                        stats["offseason_posted"] += 1
-                        await asyncio.sleep(1)  # Rate limit prevention
-                    except Exception as e:
-                        stats["errors"] += 1
-                        logger.error(
-                            f"Error posting to channel {channel_id}: {e}", exc_info=True
-                        )
+        posted, errors = await _post_internships(
+            bot, "offseason", offseason_channels, new_listings.offseason
+        )
+        stats["offseason_posted"] += posted
+        stats["errors"] += errors
 
         # Update last scrape tracking
         await config_manager.update_last_scrape(

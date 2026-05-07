@@ -41,21 +41,7 @@ Color: Gold/Yellow (#F1C40F)
 Color: Blue (#3498DB)
 ```
 
-## 3. Stats Embed (Posted after scraping)
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│ 📊 New Internships Found                                     │
-├─────────────────────────────────────────────────────────────┤
-│                                                               │
-│ ☀️ Summer               │ ❄️ Off-Season                      │
-│ 5 new                   │ 2 new                              │
-│                                                               │
-└─────────────────────────────────────────────────────────────┘
-Color: Green (#2ECC71)
-```
-
-## 4. Configuration Embed (from /view_config)
+## 3. Configuration Embed (from /view_config)
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -88,11 +74,6 @@ Color: Blurple (#5865F2)
 - ✅ Sponsorship status (only shown if available)
 - ✅ Unique ID in footer for tracking
 
-### Stats Embed:
-- ✅ Quick summary of new postings
-- ✅ Separate counts for Summer and Off-Season
-- ✅ Green color for positive/success indication
-
 ### Config Embed:
 - ✅ Shows all current settings
 - ✅ Channel mentions are clickable
@@ -105,7 +86,6 @@ Color: Blurple (#5865F2)
 When a user runs `/view_config`, they'll see the configuration embed.
 
 When the scraper finds new internships:
-1. Stats embed is posted first (summary)
-2. Then individual internship embeds for each new listing
-3. Summer internships go to the summer channel
-4. Off-Season internships go to the off-season channel
+1. Individual internship embeds are posted to their configured channel
+2. Summer internships go to the summer channel
+3. Off-Season internships go to the off-season channel

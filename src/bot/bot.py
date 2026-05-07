@@ -17,8 +17,6 @@ class InternshipBot(commands.Bot):
 
     def __init__(self, config_manager: ConfigManager):
         intents = discord.Intents.default()
-        intents.message_content = True
-
         super().__init__(
             command_prefix="!",  # Fallback prefix, mainly using slash commands
             intents=intents,
@@ -75,11 +73,11 @@ class InternshipBot(commands.Bot):
 
     async def on_guild_join(self, guild: discord.Guild):
         """Called when the bot joins a new guild."""
-        print(f"[Bot] Joined new guild: {guild.name} (ID: {guild.id})")
+        logger.info(f"Joined new guild: {guild.name} (ID: {guild.id})")
 
     async def on_guild_remove(self, guild: discord.Guild):
         """Called when the bot is removed from a guild."""
-        print(f"[Bot] Removed from guild: {guild.name} (ID: {guild.id})")
+        logger.info(f"Removed from guild: {guild.name} (ID: {guild.id})")
 
     async def close(self):
         """Cleanup resources before shutdown."""

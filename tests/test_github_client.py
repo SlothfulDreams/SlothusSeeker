@@ -1,8 +1,9 @@
 """Tests for GitHubClient."""
+
+import json
 import pytest
 from unittest.mock import AsyncMock, patch, MagicMock
 from src.scraper.github_client import GitHubClient
-from src.scraper.data_models import Internship, ScrapedData
 
 
 @pytest.fixture
@@ -89,12 +90,17 @@ def sample_listings_data():
 
 class MockResponse:
     """Mock response object for aiohttp."""
-    def __init__(self, json_data, status=200):
+    def __init__(self, json_data, status=200, headers=None):
         self.status = status
         self._json_data = json_data
+        self.headers = headers or {"Content-Type": "application/json"}
+        self._text = json.dumps(json_data)
 
     async def json(self):
         return self._json_data
+
+    async def text(self):
+        return self._text
 
 
 def create_mock_session(json_data, status=200):

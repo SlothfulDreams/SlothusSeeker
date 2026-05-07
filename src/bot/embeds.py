@@ -55,39 +55,12 @@ def create_internship_embed(internship: Internship) -> discord.Embed:
     embed.set_footer(text=f"ID: {internship.id}")
 
     return embed
-
-
-def create_stats_embed(summer_count: int, offseason_count: int) -> discord.Embed:
-    """Create an embed showing scrape statistics.
-
-    Args:
-        summer_count: Number of new summer internships
-        offseason_count: Number of new off-season internships
-
-    Returns:
-        Discord Embed object
-    """
-    embed = discord.Embed(
-        title="📊 New Internships Found",
-        color=discord.Color.green()
-    )
-
-    embed.add_field(
-        name="☀️ Summer",
-        value=f"{summer_count} new",
-        inline=True
-    )
-
-    embed.add_field(
-        name="❄️ Off-Season",
-        value=f"{offseason_count} new",
-        inline=True
-    )
-
-    return embed
-
-
-def create_config_embed(guild_config: dict, guild_name: str, scrape_interval: float = None, start_timestamp: int = None) -> discord.Embed:
+def create_config_embed(
+    guild_config: dict,
+    guild_name: str,
+    scrape_interval: float | None = None,
+    start_timestamp: int | None = None,
+) -> discord.Embed:
     """Create an embed showing current configuration.
 
     Args:

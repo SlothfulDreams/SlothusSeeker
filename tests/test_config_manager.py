@@ -121,11 +121,11 @@ class TestStartDate:
     """Test start date/timestamp methods."""
 
     def test_get_default_start_timestamp(self, config_manager):
-        """Test getting default start timestamp (1 days ago)."""
+        """Test getting default start timestamp (3 days ago)."""
         timestamp = config_manager.get_scrape_start_timestamp()
 
         # Should be approximately 3 days ago
-        three_days_ago = datetime.now() - timedelta(days=1)
+        three_days_ago = datetime.now() - timedelta(days=3)
         timestamp_date = datetime.fromtimestamp(timestamp)
 
         # Allow 1 minute tolerance for test execution time

@@ -91,7 +91,7 @@ All commands are slash commands (`/command`):
 
 - `/set_summer_channel <channel>` - Set channel for Summer 2026 internships
 - `/set_offseason_channel <channel>` - Set channel for Fall/Winter/Spring internships
-- `/set_scrape_interval <hours>` - Set how often to scrape for new internships (0.5-168 hours, default: 1 hour)
+- `/set_scrape_interval <hours>` - Set how often to scrape for new internships (0.5-168 hours, default: 6 hours)
 - `/set_start_date <days_back>` - Set how far back to scrape internships (1-365 days)
 - `/view_config` - View current channel configuration, interval, and start date
 - `/scrape_now` - Manually trigger an internship scrape with detailed statistics
@@ -108,12 +108,12 @@ All commands are slash commands (`/command`):
    - **Default**: Bot scrapes internships from the last **3 days**
    - Adjust based on your needs (e.g., 7, 14, 30, 60 days)
    - Prevents flooding with old/expired internships
-5. (Optional) Run `/set_scrape_interval 3` to scrape every 3 hours instead of default 1 hour
+5. (Optional) Run `/set_scrape_interval 3` to scrape every 3 hours instead of default 6 hours
 6. Wait for the bot to scrape (or run `/scrape_now`)
 7. New internships will be posted automatically!
 
 **Scheduler Behavior:**
-- The bot checks for new internships every hour by default (configurable)
+- The bot checks for new internships every 6 hours by default (configurable)
 - If no channels are configured, the scheduler skips execution to prevent wasting resources
 - When the first channel is set up, an immediate scrape is triggered
 - Subsequent scrapes only post NEW internships (deduplication prevents spam)

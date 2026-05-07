@@ -3,7 +3,7 @@
 import asyncio
 import json
 from pathlib import Path
-from typing import Dict, Optional, Set
+from typing import Dict, Set
 
 from src.config.settings import CONFIG_FILE, LAST_SCRAPE_FILE, SCRAPE_INTERVAL_HOURS
 
@@ -14,7 +14,6 @@ class ConfigManager:
     def __init__(self):
         self.config_file = CONFIG_FILE
         self.last_scrape_file = LAST_SCRAPE_FILE
-        self._config_lock = asyncio.Lock()
         self._scrape_lock = asyncio.Lock()
         self._ensure_files_exist()
 

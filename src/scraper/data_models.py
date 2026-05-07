@@ -31,7 +31,7 @@ class Internship(BaseModel):
         """Check if this is an off-season internship (Fall/Winter/Spring)."""
         offseason_keywords = ["Fall", "Winter", "Spring"]
         return any(
-            keyword in term
+            keyword.lower() in term.lower()
             for term in self.terms
             for keyword in offseason_keywords
         )

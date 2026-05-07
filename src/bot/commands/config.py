@@ -15,6 +15,27 @@ class ConfigCommands(commands.Cog):
         self.bot = bot
         self.config_manager = config_manager
 
+    async def _validate_channel(
+        self, interaction: discord.Interaction, channel: discord.TextChannel
+    ) -> bool:
+        """Validate bot permission and channel guild context."""
+        permissions = channel.permissions_for(interaction.guild.me)
+        if not permissions.send_messages or not permissions.embed_links:
+            await interaction.response.send_message(
+                "❌ I don't have permission to send messages or embeds in that channel!\n"
+                "Please grant me `Send Messages` and `Embed Links` permissions.",
+                ephemeral=True,
+            )
+            return False
+
+        if channel.guild.id != interaction.guild_id:
+            await interaction.response.send_message(
+                "❌ Channel must be in this server!", ephemeral=True
+            )
+            return False
+
+        return True
+
     @app_commands.command(
         name="set_summer_channel",
         description="Set the channel for summer internship postings",
@@ -25,25 +46,8 @@ class ConfigCommands(commands.Cog):
         self, interaction: discord.Interaction, channel: discord.TextChannel
     ):
         """Set the summer internships channel."""
-        # Validate bot permissions
-        permissions = channel.permissions_for(interaction.guild.me)
-        if not permissions.send_messages or not permissions.embed_links:
-            await interaction.response.send_message(
-                "❌ I don't have permission to send messages or embeds in that channel!\n"
-                "Please grant me `Send Messages` and `Embed Links` permissions.",
-                ephemeral=True,
-            )
+        if not await self._validate_channel(interaction, channel):
             return
-
-        # Validate channel is in the same guild
-        if channel.guild.id != interaction.guild_id:
-            await interaction.response.send_message(
-                "❌ Channel must be in this server!", ephemeral=True
-            )
-            return
-
-        # Check if offseason channel already exists
-        offseason_channels = self.config_manager.get_all_channels("offseason")
 
         self.config_manager.set_channel(
             guild_id=interaction.guild_id, channel_type="summer", channel_id=channel.id
@@ -54,7 +58,8 @@ class ConfigCommands(commands.Cog):
         )
 
         # Trigger immediate scrape if BOTH channels are now configured
-        if len(offseason_channels) > 0:
+        guild_config = self.config_manager.get_guild_config(interaction.guild_id)
+        if guild_config.get("offseason_channel"):
             from src.scheduler.tasks import scrape_and_post
 
             await interaction.followup.send(
@@ -77,25 +82,8 @@ class ConfigCommands(commands.Cog):
         self, interaction: discord.Interaction, channel: discord.TextChannel
     ):
         """Set the off-season internships channel."""
-        # Validate bot permissions
-        permissions = channel.permissions_for(interaction.guild.me)
-        if not permissions.send_messages or not permissions.embed_links:
-            await interaction.response.send_message(
-                "❌ I don't have permission to send messages or embeds in that channel!\n"
-                "Please grant me `Send Messages` and `Embed Links` permissions.",
-                ephemeral=True,
-            )
+        if not await self._validate_channel(interaction, channel):
             return
-
-        # Validate channel is in the same guild
-        if channel.guild.id != interaction.guild_id:
-            await interaction.response.send_message(
-                "❌ Channel must be in this server!", ephemeral=True
-            )
-            return
-
-        # Check if summer channel already exists
-        summer_channels = self.config_manager.get_all_channels("summer")
 
         self.config_manager.set_channel(
             guild_id=interaction.guild_id,
@@ -109,7 +97,8 @@ class ConfigCommands(commands.Cog):
         )
 
         # Trigger immediate scrape if BOTH channels are now configured
-        if len(summer_channels) > 0:
+        guild_config = self.config_manager.get_guild_config(interaction.guild_id)
+        if guild_config.get("summer_channel"):
             from src.scheduler.tasks import scrape_and_post
 
             await interaction.followup.send(
@@ -150,7 +139,7 @@ class ConfigCommands(commands.Cog):
             summer_channels = self.config_manager.get_all_channels("summer")
             offseason_channels = self.config_manager.get_all_channels("offseason")
 
-            if not summer_channels and not offseason_channels:
+            if not summer_channels or not offseason_channels:
                 await interaction.followup.send(
                     "⚠️ No channels configured! Use `/set_summer_channel` and `/set_offseason_channel` first.",
                     ephemeral=True,
