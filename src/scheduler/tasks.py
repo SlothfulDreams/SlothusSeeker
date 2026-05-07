@@ -1,17 +1,32 @@
 """Background tasks for periodic scraping."""
 
 import asyncio
+from dataclasses import dataclass
 from typing import Iterable
 from typing import Optional
 
+import discord
 from discord.ext import commands, tasks
 
 from src.bot.embeds import create_internship_embed
 from src.config.config_manager import ConfigManager
 from src.scraper.github_client import GitHubClient
+from src.scraper.data_models import ScrapedData
 from src.utils.logger import setup_logger
 
 logger = setup_logger(__name__)
+
+POST_THROTTLE_SECONDS = 1.0
+
+
+@dataclass(slots=True)
+class ScrapeStats:
+    """Summary of a scrape/post cycle."""
+
+    summer_posted: int = 0
+    offseason_posted: int = 0
+    total_new: int = 0
+    errors: int = 0
 
 
 async def _post_internships(
@@ -30,10 +45,17 @@ async def _post_internships(
     """
     posted_count = 0
     error_count = 0
+    internships = tuple(internships)
 
     for channel_id in channels:
         channel = bot.get_channel(channel_id)
         if not channel:
+            logger.warning(f"Configured {channel_type} channel not found: {channel_id}")
+            continue
+        if not isinstance(channel, discord.abc.Messageable):
+            logger.warning(
+                f"Configured {channel_type} channel is not messageable: {channel_id}"
+            )
             continue
 
         for internship in internships:
@@ -41,7 +63,7 @@ async def _post_internships(
             try:
                 await channel.send(embed=embed)
                 posted_count += 1
-                await asyncio.sleep(1)  # Rate limit prevention
+                await asyncio.sleep(POST_THROTTLE_SECONDS)
             except Exception as e:
                 error_count += 1
                 logger.error(
@@ -52,97 +74,48 @@ async def _post_internships(
     return posted_count, error_count
 
 
-async def scrape_and_post(bot: commands.Bot, config_manager: ConfigManager):
-    """Scrape internships and post new ones to configured channels.
+def _log_start_timestamp(start_timestamp: int | None) -> None:
+    """Log the active date filter."""
+    if not start_timestamp:
+        return
 
-    Args:
-        bot: Discord bot instance
-        config_manager: Configuration manager instance
-    """
-    logger.info("Starting scrape...")
+    from datetime import datetime
 
-    # Initialize GitHub client outside try block to ensure cleanup in finally
-    github_client = GitHubClient()
-
-    try:
-        # Get last scrape data and start timestamp
-        last_scrape = config_manager.get_last_scrape()
-        start_timestamp = config_manager.get_scrape_start_timestamp()
-
-        if start_timestamp:
-            from datetime import datetime
-
-            date_str = datetime.fromtimestamp(start_timestamp).strftime("%Y-%m-%d")
-            logger.info(f"Filtering internships posted after {date_str}")
-
-        # Fetch new listings
-        new_listings, all_listings = await github_client.get_new_listings(
-            last_scrape, start_timestamp
-        )
-
-        logger.info(f"Found {len(new_listings.summer)} new summer internships")
-        logger.info(f"Found {len(new_listings.offseason)} new off-season internships")
-
-        summer_channels = config_manager.get_all_channels("summer")
-        await _post_internships(bot, "summer", summer_channels, new_listings.summer)
-
-        # Post off-season internships
-        offseason_channels = config_manager.get_all_channels("offseason")
-        await _post_internships(
-            bot, "offseason", offseason_channels, new_listings.offseason
-        )
-
-        # Update last scrape tracking
-        await config_manager.update_last_scrape(
-            summer_ids=all_listings.get_all_ids("summer"),
-            offseason_ids=all_listings.get_all_ids("offseason"),
-        )
-
-        logger.info("Scrape completed successfully")
-
-    except Exception as e:
-        logger.error(f"Error during scrape: {e}", exc_info=True)
-        raise
-    finally:
-        await github_client.close()
+    date_str = datetime.fromtimestamp(start_timestamp).strftime("%Y-%m-%d")
+    logger.info(f"Filtering internships posted after {date_str}")
 
 
-async def scrape_and_post_with_stats(
+async def _fetch_new_listings(
+    config_manager: ConfigManager,
+) -> tuple[ScrapedData, ScrapedData]:
+    """Fetch listings and apply the configured dedupe/date filters."""
+    last_scrape = config_manager.get_last_scrape()
+    start_timestamp = config_manager.get_scrape_start_timestamp()
+    _log_start_timestamp(start_timestamp)
+
+    async with GitHubClient() as github_client:
+        return await github_client.get_new_listings(last_scrape, start_timestamp)
+
+
+async def scrape_and_post(
     bot: commands.Bot, config_manager: ConfigManager
-) -> dict:
-    """Scrape internships and post new ones with statistics tracking.
+) -> ScrapeStats:
+    """Scrape internships and post new ones to configured channels.
 
     Args:
         bot: Discord bot instance
         config_manager: Configuration manager instance
 
     Returns:
-        Dictionary with statistics: summer_posted, offseason_posted, total_new, errors
+        Scrape/post statistics
     """
-    logger.info("Starting scrape with stats tracking...")
-
-    stats = {"summer_posted": 0, "offseason_posted": 0, "total_new": 0, "errors": 0}
-
-    # Initialize GitHub client outside try block to ensure cleanup in finally
-    github_client = GitHubClient()
+    logger.info("Starting scrape...")
+    stats = ScrapeStats()
 
     try:
-        # Get last scrape data and start timestamp
-        last_scrape = config_manager.get_last_scrape()
-        start_timestamp = config_manager.get_scrape_start_timestamp()
+        new_listings, all_listings = await _fetch_new_listings(config_manager)
 
-        if start_timestamp:
-            from datetime import datetime
-
-            date_str = datetime.fromtimestamp(start_timestamp).strftime("%Y-%m-%d")
-            logger.info(f"Filtering internships posted after {date_str}")
-
-        # Fetch new listings
-        new_listings, all_listings = await github_client.get_new_listings(
-            last_scrape, start_timestamp
-        )
-
-        stats["total_new"] = len(new_listings.summer) + len(new_listings.offseason)
+        stats.total_new = len(new_listings.summer) + len(new_listings.offseason)
 
         logger.info(f"Found {len(new_listings.summer)} new summer internships")
         logger.info(f"Found {len(new_listings.offseason)} new off-season internships")
@@ -152,32 +125,30 @@ async def scrape_and_post_with_stats(
         posted, errors = await _post_internships(
             bot, "summer", summer_channels, new_listings.summer
         )
-        stats["summer_posted"] += posted
-        stats["errors"] += errors
+        stats.summer_posted += posted
+        stats.errors += errors
 
         # Post off-season internships
         offseason_channels = config_manager.get_all_channels("offseason")
         posted, errors = await _post_internships(
             bot, "offseason", offseason_channels, new_listings.offseason
         )
-        stats["offseason_posted"] += posted
-        stats["errors"] += errors
+        stats.offseason_posted += posted
+        stats.errors += errors
 
         # Update last scrape tracking
-        await config_manager.update_last_scrape(
+        config_manager.update_last_scrape(
             summer_ids=all_listings.get_all_ids("summer"),
             offseason_ids=all_listings.get_all_ids("offseason"),
         )
 
         logger.info(
-            f"Scrape completed: {stats['summer_posted']} summer, {stats['offseason_posted']} offseason posted"
+            f"Scrape completed: {stats.summer_posted} summer, {stats.offseason_posted} offseason posted"
         )
 
     except Exception as e:
         logger.error(f"Error during scrape: {e}", exc_info=True)
         raise
-    finally:
-        await github_client.close()
 
     return stats
 

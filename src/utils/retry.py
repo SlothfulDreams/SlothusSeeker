@@ -1,7 +1,7 @@
 """Retry logic with exponential backoff for network operations."""
 
 import asyncio
-from typing import Callable, Type, TypeVar
+from typing import Awaitable, Callable, Type, TypeVar
 
 from src.utils.logger import setup_logger
 
@@ -11,7 +11,7 @@ T = TypeVar("T")
 
 
 async def retry_with_backoff(
-    func: Callable[[], T],
+    func: Callable[[], Awaitable[T]],
     max_retries: int = 3,
     initial_delay: float = 1.0,
     backoff_factor: float = 2.0,
@@ -33,7 +33,7 @@ async def retry_with_backoff(
         The last exception if all retries fail
     """
     delay = initial_delay
-    last_exception = None
+    last_exception: Exception | None = None
 
     for attempt in range(max_retries):
         try:
@@ -50,5 +50,7 @@ async def retry_with_backoff(
             else:
                 logger.error(f"All {max_retries} attempts failed")
 
-    # Raise the last exception if all retries failed
+    if last_exception is None:
+        raise RuntimeError("retry_with_backoff exhausted without capturing an error")
+
     raise last_exception

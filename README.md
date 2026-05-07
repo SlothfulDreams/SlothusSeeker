@@ -10,7 +10,7 @@ A Discord bot that automatically scrapes internship listings from [SimplifyJobs/
 - 🚫 **Deduplication**: Tracks posted internships to avoid spam
 - ⚡ **Slash Commands**: Modern Discord slash commands for easy configuration
 - 📊 **Rich Embeds**: Beautiful formatted internship posts with all details
-- ⚡ **Performance Optimized**: Stops parsing early when hitting old entries (assumes newest-first sorting)
+- ⚡ **Reliable Parsing**: Processes unsorted source data and sorts results newest-first before posting
 
 ## Prerequisites
 
@@ -54,6 +54,7 @@ Edit `.env` and add:
 DISCORD_BOT_TOKEN=your_discord_bot_token_here
 GITHUB_TOKEN=your_github_token_here  # Optional
 SCRAPE_INTERVAL_HOURS=1
+TEST_GUILD_ID=your_test_server_id  # Optional, syncs slash commands instantly for development
 ```
 
 ### 5. Create a Discord Bot
@@ -62,14 +63,13 @@ SCRAPE_INTERVAL_HOURS=1
 2. Click "New Application" and give it a name
 3. Go to the "Bot" section and click "Add Bot"
 4. Copy the bot token and add it to your `.env` file
-5. Enable "Message Content Intent" under Privileged Gateway Intents
-6. Go to "OAuth2" > "URL Generator"
-7. Select scopes: `bot` and `applications.commands`
-8. Select bot permissions:
+5. Go to "OAuth2" > "URL Generator"
+6. Select scopes: `bot` and `applications.commands`
+7. Select bot permissions:
    - Send Messages
    - Embed Links
    - Read Message History
-9. Copy the generated URL and use it to invite the bot to your server
+8. Copy the generated URL and use it to invite the bot to your server
 
 ## Running the Bot
 
@@ -101,9 +101,9 @@ All commands are slash commands (`/command`):
 
 1. Invite the bot to your Discord server
 2. Run `/set_summer_channel #summer-internships`
-   - **Note**: Setting the first channel automatically triggers an immediate scrape
-   - All internships from the last 3 days will be posted
 3. Run `/set_offseason_channel #offseason-jobs`
+   - **Note**: Once both channels are configured, the bot triggers an immediate scrape
+   - All matching internships from the last 3 days will be posted
 4. (Optional) Run `/set_start_date 30` to customize how far back to scrape
    - **Default**: Bot scrapes internships from the last **3 days**
    - Adjust based on your needs (e.g., 7, 14, 30, 60 days)
@@ -115,7 +115,7 @@ All commands are slash commands (`/command`):
 **Scheduler Behavior:**
 - The bot checks for new internships every 6 hours by default (configurable)
 - If no channels are configured, the scheduler skips execution to prevent wasting resources
-- When the first channel is set up, an immediate scrape is triggered
+- When both posting channels are set up, an immediate scrape is triggered
 - Subsequent scrapes only post NEW internships (deduplication prevents spam)
 
 ## Project Structure

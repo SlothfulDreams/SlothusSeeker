@@ -21,7 +21,7 @@ GITHUB_REPO_URL = os.getenv(
 )
 
 # Scraping Configuration
-SCRAPE_INTERVAL_HOURS = int(os.getenv("SCRAPE_INTERVAL_HOURS", "6"))
+SCRAPE_INTERVAL_HOURS = float(os.getenv("SCRAPE_INTERVAL_HOURS", "6"))
 
 # File paths
 BASE_DIR = Path(__file__).parent.parent.parent

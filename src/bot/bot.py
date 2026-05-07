@@ -27,23 +27,22 @@ class InternshipBot(commands.Bot):
 
     async def setup_hook(self):
         """Setup hook called when the bot starts."""
-        # Load commands
         from src.bot.commands import config as config_commands
 
         await config_commands.setup(self, self.config_manager)
 
-        # Load scheduler
         from src.scheduler import tasks
 
         await tasks.setup(self, self.config_manager)
 
-        # Sync commands with Discord
+        await self._sync_commands()
+
+    async def _sync_commands(self):
+        """Sync slash commands globally or to a development guild."""
         logger.info("Syncing commands...")
 
-        # Check if in development mode (test guild specified)
         test_guild_id = os.getenv("TEST_GUILD_ID")
         if test_guild_id:
-            # Development mode: sync to test guild only (instant, no duplicates)
             try:
                 guild_id = int(test_guild_id)
                 guild = discord.Object(id=guild_id)
@@ -59,7 +58,6 @@ class InternshipBot(commands.Bot):
                 await self.tree.sync()
                 logger.info("Commands synced globally")
         else:
-            # Production mode: sync globally
             await self.tree.sync()
             logger.info(
                 "Commands synced globally (production mode, may take up to 1 hour)"

@@ -6,6 +6,11 @@ from discord.ext import commands
 
 from src.bot.embeds import create_config_embed, create_internship_embed
 from src.config.config_manager import ConfigManager
+from src.scheduler.tasks import ScrapeStats, scrape_and_post
+from src.scraper.github_client import GitHubClient
+from src.utils.logger import setup_logger
+
+logger = setup_logger(__name__)
 
 
 class ConfigCommands(commands.Cog):
@@ -19,12 +24,9 @@ class ConfigCommands(commands.Cog):
         self, interaction: discord.Interaction, channel: discord.TextChannel
     ) -> bool:
         """Validate bot permission and channel guild context."""
-        permissions = channel.permissions_for(interaction.guild.me)
-        if not permissions.send_messages or not permissions.embed_links:
+        if interaction.guild is None or interaction.guild.me is None:
             await interaction.response.send_message(
-                "❌ I don't have permission to send messages or embeds in that channel!\n"
-                "Please grant me `Send Messages` and `Embed Links` permissions.",
-                ephemeral=True,
+                "❌ This command can only be used inside a server.", ephemeral=True
             )
             return False
 
@@ -34,7 +36,69 @@ class ConfigCommands(commands.Cog):
             )
             return False
 
+        permissions = channel.permissions_for(interaction.guild.me)
+        if not permissions.send_messages or not permissions.embed_links:
+            await interaction.response.send_message(
+                "❌ I don't have permission to send messages or embeds in that channel!\n"
+                "Please grant me `Send Messages` and `Embed Links` permissions.",
+                ephemeral=True,
+            )
+            return False
+
         return True
+
+    async def _set_channel(
+        self,
+        interaction: discord.Interaction,
+        channel: discord.TextChannel,
+        channel_type: str,
+        success_message: str,
+        other_channel_key: str,
+    ) -> None:
+        """Store a configured channel and run the first scrape when ready."""
+        if not await self._validate_channel(interaction, channel):
+            return
+
+        self.config_manager.set_channel(
+            guild_id=interaction.guild_id,
+            channel_type=channel_type,
+            channel_id=channel.id,
+        )
+
+        await interaction.response.send_message(success_message, ephemeral=True)
+
+        guild_config = self.config_manager.get_guild_config(interaction.guild_id)
+        if not guild_config.get(other_channel_key):
+            return
+
+        await interaction.followup.send(
+            "🔄 Both channels configured! Triggering initial scrape...",
+            ephemeral=True,
+        )
+
+        stats = await scrape_and_post(self.bot, self.config_manager)
+        await interaction.followup.send(
+            self._format_scrape_summary("✅ Initial scrape completed", stats),
+            ephemeral=True,
+        )
+
+    def _format_scrape_summary(self, heading: str, stats: ScrapeStats) -> str:
+        """Create a concise scrape summary for slash command followups."""
+        response = f"{heading}\n\n"
+        response += "📊 **Results:**\n"
+        response += f"• Summer internships posted: {stats.summer_posted}\n"
+        response += f"• Off-season internships posted: {stats.offseason_posted}\n"
+        response += f"• Total new listings: {stats.total_new}\n"
+
+        if stats.errors > 0:
+            response += (
+                f"\n⚠️ {stats.errors} error(s) occurred while posting. Check logs."
+            )
+
+        if stats.total_new == 0:
+            response += "\n\n💡 No new internships found."
+
+        return response
 
     @app_commands.command(
         name="set_summer_channel",
@@ -46,31 +110,13 @@ class ConfigCommands(commands.Cog):
         self, interaction: discord.Interaction, channel: discord.TextChannel
     ):
         """Set the summer internships channel."""
-        if not await self._validate_channel(interaction, channel):
-            return
-
-        self.config_manager.set_channel(
-            guild_id=interaction.guild_id, channel_type="summer", channel_id=channel.id
+        await self._set_channel(
+            interaction=interaction,
+            channel=channel,
+            channel_type="summer",
+            success_message=f"✅ Summer internships will be posted to {channel.mention}",
+            other_channel_key="offseason_channel",
         )
-
-        await interaction.response.send_message(
-            f"✅ Summer internships will be posted to {channel.mention}", ephemeral=True
-        )
-
-        # Trigger immediate scrape if BOTH channels are now configured
-        guild_config = self.config_manager.get_guild_config(interaction.guild_id)
-        if guild_config.get("offseason_channel"):
-            from src.scheduler.tasks import scrape_and_post
-
-            await interaction.followup.send(
-                "🔄 Both channels configured! Triggering initial scrape...",
-                ephemeral=True,
-            )
-            await scrape_and_post(self.bot, self.config_manager)
-            await interaction.followup.send(
-                "✅ Initial scrape completed! Internships have been posted.",
-                ephemeral=True,
-            )
 
     @app_commands.command(
         name="set_offseason_channel",
@@ -82,34 +128,16 @@ class ConfigCommands(commands.Cog):
         self, interaction: discord.Interaction, channel: discord.TextChannel
     ):
         """Set the off-season internships channel."""
-        if not await self._validate_channel(interaction, channel):
-            return
-
-        self.config_manager.set_channel(
-            guild_id=interaction.guild_id,
+        await self._set_channel(
+            interaction=interaction,
+            channel=channel,
             channel_type="offseason",
-            channel_id=channel.id,
+            success_message=(
+                "✅ Off-season internships (Fall/Winter/Spring) will be posted "
+                f"to {channel.mention}"
+            ),
+            other_channel_key="summer_channel",
         )
-
-        await interaction.response.send_message(
-            f"✅ Off-season internships (Fall/Winter/Spring) will be posted to {channel.mention}",
-            ephemeral=True,
-        )
-
-        # Trigger immediate scrape if BOTH channels are now configured
-        guild_config = self.config_manager.get_guild_config(interaction.guild_id)
-        if guild_config.get("summer_channel"):
-            from src.scheduler.tasks import scrape_and_post
-
-            await interaction.followup.send(
-                "🔄 Both channels configured! Triggering initial scrape...",
-                ephemeral=True,
-            )
-            await scrape_and_post(self.bot, self.config_manager)
-            await interaction.followup.send(
-                "✅ Initial scrape completed! Internships have been posted.",
-                ephemeral=True,
-            )
 
     @app_commands.command(
         name="view_config", description="View the current bot configuration"
@@ -146,31 +174,15 @@ class ConfigCommands(commands.Cog):
                 )
                 return
 
-            # Trigger the scrape task with stats
-            from src.scheduler.tasks import scrape_and_post_with_stats
-
-            stats = await scrape_and_post_with_stats(self.bot, self.config_manager)
-
-            # Build detailed response
-            response = "✅ **Scrape Complete**\n\n"
-            response += "📊 **Results:**\n"
-            response += f"• Summer internships posted: {stats['summer_posted']}\n"
-            response += (
-                f"• Off-season internships posted: {stats['offseason_posted']}\n"
-            )
-            response += f"• Total new listings: {stats['total_new']}\n"
-
-            if stats["errors"] > 0:
-                response += f"\n⚠️ {stats['errors']} error(s) occurred while posting (check logs)"
-
-            if stats["total_new"] == 0:
-                response += "\n\n💡 No new internships found (all already posted or filtered by date)"
+            stats = await scrape_and_post(self.bot, self.config_manager)
+            response = self._format_scrape_summary("✅ **Scrape Complete**", stats)
 
             await interaction.followup.send(response, ephemeral=True)
 
         except Exception as e:
+            logger.error(f"Error during manual scrape: {e}", exc_info=True)
             await interaction.followup.send(
-                f"❌ Error during scrape: {str(e)}", ephemeral=True
+                "❌ Error during scrape. Check logs for details.", ephemeral=True
             )
 
     @app_commands.command(
@@ -183,16 +195,10 @@ class ConfigCommands(commands.Cog):
         await interaction.response.defer(ephemeral=True)
 
         try:
-            from src.scraper.github_client import GitHubClient
-
-            # Create client and fetch listings
-            github_client = GitHubClient()
-
-            # Get start timestamp for filtering
             start_timestamp = self.config_manager.get_scrape_start_timestamp()
 
-            # Fetch all listings
-            all_listings = await github_client.fetch_listings(start_timestamp)
+            async with GitHubClient() as github_client:
+                all_listings = await github_client.fetch_listings(start_timestamp)
 
             # Get the first 5 from each category
             summer_internships = all_listings.summer[:5]
@@ -227,12 +233,10 @@ class ConfigCommands(commands.Cog):
                     "No internships found matching your criteria.", ephemeral=True
                 )
 
-            # Close the client session
-            await github_client.close()
-
         except Exception as e:
+            logger.error(f"Error during test scrape: {e}", exc_info=True)
             await interaction.followup.send(
-                f"❌ Error during test scrape: {str(e)}", ephemeral=True
+                "❌ Error during test scrape. Check logs for details.", ephemeral=True
             )
 
     @app_commands.command(
@@ -280,7 +284,6 @@ class ConfigCommands(commands.Cog):
     ):
         """Set the start date for scraping internships."""
         try:
-            import time
             from datetime import datetime, timedelta
 
             # Calculate timestamp

@@ -1,6 +1,20 @@
 """Discord embed formatting for internship listings."""
+
+from datetime import datetime
+
 import discord
+
 from src.scraper.data_models import Internship
+
+EMBED_TITLE_LIMIT = 256
+EMBED_FIELD_LIMIT = 1024
+
+
+def _truncate(value: str, limit: int) -> str:
+    """Trim a string to a Discord embed limit."""
+    if len(value) <= limit:
+        return value
+    return f"{value[: limit - 1]}…"
 
 
 def create_internship_embed(internship: Internship) -> discord.Embed:
@@ -12,7 +26,6 @@ def create_internship_embed(internship: Internship) -> discord.Embed:
     Returns:
         Discord Embed object
     """
-    # Determine color based on type
     if internship.is_summer:
         color = discord.Color.gold()
         season_emoji = "☀️"
@@ -20,41 +33,41 @@ def create_internship_embed(internship: Internship) -> discord.Embed:
         color = discord.Color.blue()
         season_emoji = "❄️"
 
-    # Create title with company and role
-    title = f"{internship.company_name} - {internship.title}"
+    title = _truncate(
+        f"{internship.company_name} - {internship.title}", EMBED_TITLE_LIMIT
+    )
 
-    # Create embed
     embed = discord.Embed(
         title=title,
         url=internship.url,
         color=color,
-        description=f"{season_emoji} {', '.join(internship.terms)}"
+        description=_truncate(
+            f"{season_emoji} {', '.join(internship.terms)}", EMBED_FIELD_LIMIT
+        ),
     )
 
-    # Add fields
     embed.add_field(
         name="📍 Location",
-        value=internship.location_str,
-        inline=True
+        value=_truncate(internship.location_str, EMBED_FIELD_LIMIT),
+        inline=True,
     )
 
     embed.add_field(
-        name="📅 Posted",
-        value=internship.posted_date_str,
-        inline=True
+        name="📅 Posted", value=internship.posted_date_str, inline=True
     )
 
     if internship.sponsorship:
         embed.add_field(
             name="🛂 Sponsorship",
-            value=internship.sponsorship,
-            inline=True
+            value=_truncate(internship.sponsorship, EMBED_FIELD_LIMIT),
+            inline=True,
         )
 
-    # Add footer
     embed.set_footer(text=f"ID: {internship.id}")
 
     return embed
+
+
 def create_config_embed(
     guild_config: dict,
     guild_name: str,
@@ -74,7 +87,7 @@ def create_config_embed(
     """
     embed = discord.Embed(
         title=f"⚙️ Configuration for {guild_name}",
-        color=discord.Color.blurple()
+        color=discord.Color.blurple(),
     )
 
     summer_channel = guild_config.get("summer_channel")
@@ -83,13 +96,13 @@ def create_config_embed(
     embed.add_field(
         name="☀️ Summer Channel",
         value=f"<#{summer_channel}>" if summer_channel else "Not configured",
-        inline=False
+        inline=False,
     )
 
     embed.add_field(
         name="❄️ Off-Season Channel",
         value=f"<#{offseason_channel}>" if offseason_channel else "Not configured",
-        inline=False
+        inline=False,
     )
 
     if scrape_interval is not None:
@@ -106,18 +119,16 @@ def create_config_embed(
                 interval_str = f"{scrape_interval} hours"
 
         embed.add_field(
-            name="⏰ Scrape Interval",
-            value=interval_str,
-            inline=False
+            name="⏰ Scrape Interval", value=interval_str, inline=False
         )
 
-    from datetime import datetime
-    date_str = datetime.fromtimestamp(start_timestamp).strftime("%B %d, %Y")
-    embed.add_field(
-        name="📅 Scraping From",
-        value=f"Internships posted after {date_str}",
-        inline=False
-    )
+    if start_timestamp is not None:
+        date_str = datetime.fromtimestamp(start_timestamp).strftime("%B %d, %Y")
+        embed.add_field(
+            name="📅 Scraping From",
+            value=f"Internships posted after {date_str}",
+            inline=False,
+        )
 
     if not summer_channel and not offseason_channel:
         embed.description = "No channels configured yet. Use `/set_summer_channel` or `/set_offseason_channel` to get started!"

@@ -1,6 +1,5 @@
 """Manager for bot configuration stored in JSON files."""
 
-import asyncio
 import json
 from pathlib import Path
 from typing import Dict, Set
@@ -14,7 +13,6 @@ class ConfigManager:
     def __init__(self):
         self.config_file = CONFIG_FILE
         self.last_scrape_file = LAST_SCRAPE_FILE
-        self._scrape_lock = asyncio.Lock()
         self._ensure_files_exist()
 
     def _ensure_files_exist(self):
@@ -94,16 +92,15 @@ class ConfigManager:
             "offseason": set(data.get("offseason", [])),
         }
 
-    async def update_last_scrape(self, summer_ids: Set[str], offseason_ids: Set[str]):
-        """Update last scrape tracking file with atomic write and lock.
+    def update_last_scrape(self, summer_ids: Set[str], offseason_ids: Set[str]):
+        """Update last scrape tracking file.
 
         Args:
             summer_ids: Set of UUIDs for summer internships
             offseason_ids: Set of UUIDs for off-season internships
         """
-        async with self._scrape_lock:
-            data = {"summer": list(summer_ids), "offseason": list(offseason_ids)}
-            self._atomic_write(self.last_scrape_file, data)
+        data = {"summer": sorted(summer_ids), "offseason": sorted(offseason_ids)}
+        self._atomic_write(self.last_scrape_file, data)
 
     # Scrape Interval Methods
     def get_scrape_interval(self) -> float:
