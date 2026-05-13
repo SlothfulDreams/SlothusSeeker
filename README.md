@@ -110,8 +110,8 @@ heroku ps:scale worker=1
 ```
 
 The Heroku app URL may show `No web processes running`; that is expected because
-this bot does not serve a website. For other hosts, use an always-on worker
-process with `uv run python main.py`.
+this bot does not serve a website. Heroku runs the worker with `python main.py`.
+For other hosts, use an always-on worker process with `uv run python main.py`.
 
 ## Bot Commands
 
