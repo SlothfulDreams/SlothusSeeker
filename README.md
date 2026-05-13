@@ -103,7 +103,15 @@ Global command sync is skipped by default to avoid Discord registration rate lim
 
 ### Production
 
-For production, consider using a process manager like systemd or Docker.
+For Heroku, this repo runs as a worker dyno:
+
+```bash
+heroku ps:scale worker=1
+```
+
+The Heroku app URL may show `No web processes running`; that is expected because
+this bot does not serve a website. For other hosts, use an always-on worker
+process with `uv run python main.py`.
 
 ## Bot Commands
 
