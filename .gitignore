@@ -28,8 +28,6 @@ venv/
 ENV/
 env/
 
-# UV
-.python-version
 
 # IDE
 .vscode/
