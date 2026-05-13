@@ -1,20 +1,40 @@
 """Discord slash commands for bot configuration."""
 
+from datetime import datetime, timedelta
+
 import discord
 from discord import app_commands
 from discord.ext import commands
 
-from src.bot.embeds import create_config_embed, create_internship_embed
+from src.bot.embeds import create_config_embed
+from src.bot.views import CompanyListView
 from src.config.config_manager import ConfigManager
-from src.scheduler.tasks import ScrapeStats, scrape_and_post
-from src.scraper.github_client import GitHubClient
+from src.config.settings import COMPANIES_PER_PAGE
+from src.scheduler.tasks import ScrapeStats, get_scraper_cog, scrape_and_post
+from src.scraper.data_models import (
+    SEASON_DISPLAY_NAMES,
+    SEASONS,
+    normalize_company_name,
+)
 from src.utils.logger import setup_logger
 
 logger = setup_logger(__name__)
 
+SEASON_CHOICES = [
+    app_commands.Choice(name=SEASON_DISPLAY_NAMES[season], value=season)
+    for season in SEASONS
+]
+
 
 class ConfigCommands(commands.Cog):
-    """Cog for configuration commands."""
+    """Cog for configuration and company allow-list commands."""
+
+    config_group = app_commands.Group(
+        name="config", description="Manage season posting channels"
+    )
+    companies_group = app_commands.Group(
+        name="companies", description="Manage company notification allow-list"
+    )
 
     def __init__(self, bot: commands.Bot, config_manager: ConfigManager):
         self.bot = bot
@@ -47,115 +67,146 @@ class ConfigCommands(commands.Cog):
 
         return True
 
-    async def _set_channel(
-        self,
-        interaction: discord.Interaction,
-        channel: discord.TextChannel,
-        channel_type: str,
-        success_message: str,
-        other_channel_key: str,
-    ) -> None:
-        """Store a configured channel and run the first scrape when ready."""
-        if not await self._validate_channel(interaction, channel):
-            return
+    async def _require_guild(self, interaction: discord.Interaction) -> bool:
+        if interaction.guild is not None and interaction.guild_id is not None:
+            return True
 
-        self.config_manager.set_channel(
-            guild_id=interaction.guild_id,
-            channel_type=channel_type,
-            channel_id=channel.id,
+        await interaction.response.send_message(
+            "❌ This command can only be used inside a server.", ephemeral=True
         )
-
-        await interaction.response.send_message(success_message, ephemeral=True)
-
-        guild_config = self.config_manager.get_guild_config(interaction.guild_id)
-        if not guild_config.get(other_channel_key):
-            return
-
-        await interaction.followup.send(
-            "🔄 Both channels configured! Triggering initial scrape...",
-            ephemeral=True,
-        )
-
-        stats = await scrape_and_post(self.bot, self.config_manager)
-        await interaction.followup.send(
-            self._format_scrape_summary("✅ Initial scrape completed", stats),
-            ephemeral=True,
-        )
+        return False
 
     def _format_scrape_summary(self, heading: str, stats: ScrapeStats) -> str:
         """Create a concise scrape summary for slash command followups."""
-        response = f"{heading}\n\n"
-        response += "📊 **Results:**\n"
-        response += f"• Summer internships posted: {stats.summer_posted}\n"
-        response += f"• Off-season internships posted: {stats.offseason_posted}\n"
-        response += f"• Total new listings: {stats.total_new}\n"
+        lines = [heading, "", "📊 **Results:**"]
+        for season in SEASONS:
+            label = SEASON_DISPLAY_NAMES[season]
+            posted = stats.posted_by_season[season]
+            lines.append(f"• {label} internships posted: {posted}")
+        lines.append(f"• Total new listings: {stats.total_new}")
 
         if stats.errors > 0:
-            response += (
-                f"\n⚠️ {stats.errors} error(s) occurred while posting. Check logs."
+            lines.extend(
+                [
+                    "",
+                    f"⚠️ {stats.errors} error(s) occurred while posting. Check logs.",
+                ]
             )
 
         if stats.total_new == 0:
-            response += "\n\n💡 No new internships found."
+            lines.extend(["", "💡 No new matching internships found."])
 
-        return response
+        return "\n".join(lines)
 
-    @app_commands.command(
-        name="set_summer_channel",
-        description="Set the channel for summer internship postings",
+    async def _send_operation_error(
+        self, interaction: discord.Interaction, action: str, error: Exception
+    ) -> None:
+        """Log an operation failure and send a safe ephemeral response."""
+        logger.error("Error while %s: %s", action, error, exc_info=True)
+        message = f"❌ Error while {action}. Check logs for details."
+        if interaction.response.is_done():
+            await interaction.followup.send(message, ephemeral=True)
+            return
+
+        await interaction.response.send_message(message, ephemeral=True)
+
+    @config_group.command(
+        name="set-season-channel",
+        description="Set the channel for a season's internship postings",
     )
-    @app_commands.describe(channel="The channel to post summer internships")
+    @app_commands.describe(
+        season="The season to configure",
+        channel="The channel to post matching internships",
+    )
+    @app_commands.choices(season=SEASON_CHOICES)
     @app_commands.default_permissions(administrator=True)
-    async def set_summer_channel(
+    async def set_season_channel(
+        self,
+        interaction: discord.Interaction,
+        season: app_commands.Choice[str],
+        channel: discord.TextChannel,
+    ):
+        """Set a season internships channel."""
+        if not await self._validate_channel(interaction, channel):
+            return
+
+        await interaction.response.defer(ephemeral=True)
+        try:
+            await self.config_manager.set_channel(
+                guild_id=interaction.guild_id,
+                server_name=interaction.guild.name,
+                channel_type=season.value,
+                channel_id=channel.id,
+            )
+            await interaction.followup.send(
+                f"✅ {season.name} internships will be posted to {channel.mention}",
+                ephemeral=True,
+            )
+        except Exception as e:
+            await self._send_operation_error(
+                interaction,
+                "setting the season channel",
+                e,
+            )
+
+    @config_group.command(
+        name="set-sudo-channel",
+        description="Set the sudo channel for this server",
+    )
+    @app_commands.describe(channel="The sudo channel")
+    @app_commands.default_permissions(administrator=True)
+    async def set_sudo_channel(
         self, interaction: discord.Interaction, channel: discord.TextChannel
     ):
-        """Set the summer internships channel."""
-        await self._set_channel(
-            interaction=interaction,
-            channel=channel,
-            channel_type="summer",
-            success_message=f"✅ Summer internships will be posted to {channel.mention}",
-            other_channel_key="offseason_channel",
-        )
+        """Set the sudo channel."""
+        if not await self._validate_channel(interaction, channel):
+            return
 
-    @app_commands.command(
-        name="set_offseason_channel",
-        description="Set the channel for off-season (Fall/Winter/Spring) internship postings",
-    )
-    @app_commands.describe(channel="The channel to post off-season internships")
-    @app_commands.default_permissions(administrator=True)
-    async def set_offseason_channel(
-        self, interaction: discord.Interaction, channel: discord.TextChannel
-    ):
-        """Set the off-season internships channel."""
-        await self._set_channel(
-            interaction=interaction,
-            channel=channel,
-            channel_type="offseason",
-            success_message=(
-                "✅ Off-season internships (Fall/Winter/Spring) will be posted "
-                f"to {channel.mention}"
-            ),
-            other_channel_key="summer_channel",
-        )
+        await interaction.response.defer(ephemeral=True)
+        try:
+            await self.config_manager.set_sudo_channel(
+                guild_id=interaction.guild_id,
+                server_name=interaction.guild.name,
+                channel_id=channel.id,
+            )
+            await interaction.followup.send(
+                f"✅ Sudo channel set to {channel.mention}",
+                ephemeral=True,
+            )
+        except Exception as e:
+            await self._send_operation_error(
+                interaction,
+                "setting the sudo channel",
+                e,
+            )
 
-    @app_commands.command(
-        name="view_config", description="View the current bot configuration"
-    )
+    @config_group.command(name="view", description="View the current bot configuration")
     async def view_config(self, interaction: discord.Interaction):
         """View current configuration."""
-        guild_config = self.config_manager.get_guild_config(interaction.guild_id)
-        scrape_interval = self.config_manager.get_scrape_interval()
-        start_timestamp = self.config_manager.get_scrape_start_timestamp()
-        embed = create_config_embed(
-            guild_config, interaction.guild.name, scrape_interval, start_timestamp
-        )
+        if not await self._require_guild(interaction):
+            return
 
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await interaction.response.defer(ephemeral=True)
+        try:
+            guild_config = await self.config_manager.get_guild_config(
+                interaction.guild_id
+            )
+            scrape_interval_minutes = self.config_manager.get_scrape_interval_minutes()
+            start_timestamp = self.config_manager.get_scrape_start_timestamp()
+            embed = create_config_embed(
+                guild_config,
+                interaction.guild.name,
+                scrape_interval_minutes,
+                start_timestamp,
+            )
 
-    @app_commands.command(
-        name="scrape_now",
-        description="Manually trigger an internship scrape (Admin only)",
+            await interaction.followup.send(embed=embed, ephemeral=True)
+        except Exception as e:
+            await self._send_operation_error(interaction, "loading configuration", e)
+
+    @config_group.command(
+        name="scrape-now",
+        description="Manually trigger an internship scrape",
     )
     @app_commands.default_permissions(administrator=True)
     async def scrape_now(self, interaction: discord.Interaction):
@@ -163,13 +214,16 @@ class ConfigCommands(commands.Cog):
         await interaction.response.defer(ephemeral=True)
 
         try:
-            # Check if channels are configured
-            summer_channels = self.config_manager.get_all_channels("summer")
-            offseason_channels = self.config_manager.get_all_channels("offseason")
-
-            if not summer_channels or not offseason_channels:
+            if not await self.config_manager.has_any_configured_channel():
                 await interaction.followup.send(
-                    "⚠️ No channels configured! Use `/set_summer_channel` and `/set_offseason_channel` first.",
+                    "⚠️ No season channels configured! Use `/config set-season-channel` first.",
+                    ephemeral=True,
+                )
+                return
+
+            if not await self.config_manager.get_company_names():
+                await interaction.followup.send(
+                    "⚠️ No companies configured! Use `/companies add` first.",
                     ephemeral=True,
                 )
                 return
@@ -180,100 +234,38 @@ class ConfigCommands(commands.Cog):
             await interaction.followup.send(response, ephemeral=True)
 
         except Exception as e:
-            logger.error(f"Error during manual scrape: {e}", exc_info=True)
-            await interaction.followup.send(
-                "❌ Error during scrape. Check logs for details.", ephemeral=True
-            )
+            await self._send_operation_error(interaction, "running the scrape", e)
 
-    @app_commands.command(
-        name="test_scrape",
-        description="Test scrape - fetch 5 most recent internships (only visible to you)",
+    @config_group.command(
+        name="set-scrape-interval",
+        description="Set how often the bot scrapes for new internships",
     )
-    @app_commands.default_permissions(administrator=True)
-    async def test_scrape(self, interaction: discord.Interaction):
-        """Test scrape that shows the 5 most recent internships."""
-        await interaction.response.defer(ephemeral=True)
-
-        try:
-            start_timestamp = self.config_manager.get_scrape_start_timestamp()
-
-            async with GitHubClient() as github_client:
-                all_listings = await github_client.fetch_listings(start_timestamp)
-
-            # Get the first 5 from each category
-            summer_internships = all_listings.summer[:5]
-            offseason_internships = all_listings.offseason[:5]
-
-            # Build header message
-            header = (
-                f"🔍 **Test Scrape Results**\n"
-                f"📊 Total found: {len(all_listings.summer)} summer, {len(all_listings.offseason)} off-season\n"
-                f"Showing 5 most recent from each category:"
-            )
-
-            # Build embeds list (Discord allows up to 10 embeds per message)
-            embeds = []
-
-            # Add summer internship embeds
-            for internship in summer_internships:
-                embeds.append(create_internship_embed(internship))
-
-            # Add off-season internship embeds
-            for internship in offseason_internships:
-                embeds.append(create_internship_embed(internship))
-
-            # Send header message first
-            await interaction.followup.send(header, ephemeral=True)
-
-            # Send embeds if we have any
-            if embeds:
-                await interaction.followup.send(embeds=embeds, ephemeral=True)
-            else:
-                await interaction.followup.send(
-                    "No internships found matching your criteria.", ephemeral=True
-                )
-
-        except Exception as e:
-            logger.error(f"Error during test scrape: {e}", exc_info=True)
-            await interaction.followup.send(
-                "❌ Error during test scrape. Check logs for details.", ephemeral=True
-            )
-
-    @app_commands.command(
-        name="set_scrape_interval",
-        description="Set how often the bot scrapes for new internships (Admin only)",
-    )
-    @app_commands.describe(hours="Hours between scrapes (0.5-168)")
+    @app_commands.describe(minutes="Minutes between scrapes (10-10080)")
     @app_commands.default_permissions(administrator=True)
     async def set_scrape_interval(
         self,
         interaction: discord.Interaction,
-        hours: app_commands.Range[float, 0.5, 168.0],
+        minutes: app_commands.Range[int, 10, 10080],
     ):
         """Set the scrape interval."""
         try:
-            # Update the interval
-            self.config_manager.set_scrape_interval(hours)
-
-            # Restart the scraper task with new interval
-            from src.scheduler.tasks import get_scraper_cog
+            self.config_manager.set_scrape_interval_minutes(minutes)
 
             scraper_cog = get_scraper_cog(self.bot)
             if scraper_cog:
-                await scraper_cog.restart_scraper(hours)
+                await scraper_cog.restart_scraper(minutes)
 
             await interaction.response.send_message(
-                f"✅ Scrape interval updated to {hours} hours. The scheduler has been restarted.",
+                f"✅ Scrape interval updated to {minutes} minutes. "
+                "The scheduler has been restarted.",
                 ephemeral=True,
             )
         except Exception as e:
-            await interaction.response.send_message(
-                f"❌ Error updating interval: {str(e)}", ephemeral=True
-            )
+            await self._send_operation_error(interaction, "updating the interval", e)
 
-    @app_commands.command(
-        name="set_start_date",
-        description="Set the earliest date to scrape internships from (Admin only)",
+    @config_group.command(
+        name="set-start-date",
+        description="Set the earliest date to scrape internships from",
     )
     @app_commands.describe(days_back="How many days back to scrape (1-365)")
     @app_commands.default_permissions(administrator=True)
@@ -284,16 +276,9 @@ class ConfigCommands(commands.Cog):
     ):
         """Set the start date for scraping internships."""
         try:
-            from datetime import datetime, timedelta
-
-            # Calculate timestamp
             start_date = datetime.now() - timedelta(days=days_back)
             start_timestamp = int(start_date.timestamp())
-
-            # Update the config
             self.config_manager.set_scrape_start_timestamp(start_timestamp)
-
-            # Format date for display
             date_str = start_date.strftime("%B %d, %Y")
 
             await interaction.response.send_message(
@@ -302,9 +287,70 @@ class ConfigCommands(commands.Cog):
                 ephemeral=True,
             )
         except Exception as e:
-            await interaction.response.send_message(
-                f"❌ Error updating start date: {str(e)}", ephemeral=True
+            await self._send_operation_error(interaction, "updating the start date", e)
+
+    @companies_group.command(
+        name="add",
+        description="Add a company to the notification allow-list",
+    )
+    @app_commands.describe(company_name="Company name to match, case-insensitive")
+    @app_commands.default_permissions(administrator=True)
+    async def add_company(self, interaction: discord.Interaction, company_name: str):
+        """Add a company to the allow-list."""
+        await interaction.response.defer(ephemeral=True)
+        try:
+            normalized = normalize_company_name(company_name)
+            company = await self.config_manager.add_company(normalized)
+            company_id = company.get("id", "existing")
+            await interaction.followup.send(
+                f"✅ Added `{normalized}` to Companies with ID `{company_id}`.",
+                ephemeral=True,
             )
+        except Exception as e:
+            await self._send_operation_error(interaction, "adding the company", e)
+
+    @companies_group.command(
+        name="list",
+        description="List companies in the notification allow-list",
+    )
+    @app_commands.default_permissions(administrator=True)
+    async def list_companies(self, interaction: discord.Interaction):
+        """List all allow-listed companies."""
+        await interaction.response.defer(ephemeral=True)
+        try:
+            companies = await self.config_manager.list_companies()
+            view = CompanyListView(companies, owner_id=interaction.user.id)
+            await interaction.followup.send(
+                embed=view.embed(),
+                view=view if len(companies) > COMPANIES_PER_PAGE else None,
+                ephemeral=True,
+            )
+        except Exception as e:
+            await self._send_operation_error(interaction, "listing companies", e)
+
+    @companies_group.command(
+        name="delete",
+        description="Delete a company from the notification allow-list by ID",
+    )
+    @app_commands.describe(company_id="The company ID from /companies list")
+    @app_commands.default_permissions(administrator=True)
+    async def delete_company(self, interaction: discord.Interaction, company_id: int):
+        """Delete an allow-listed company by ID."""
+        await interaction.response.defer(ephemeral=True)
+        try:
+            deleted = await self.config_manager.delete_company(company_id)
+            if deleted:
+                await interaction.followup.send(
+                    f"✅ Deleted company ID `{company_id}`.", ephemeral=True
+                )
+                return
+
+            await interaction.followup.send(
+                f"⚠️ No company found with ID `{company_id}`.",
+                ephemeral=True,
+            )
+        except Exception as e:
+            await self._send_operation_error(interaction, "deleting the company", e)
 
 
 async def setup(bot: commands.Bot, config_manager: ConfigManager):

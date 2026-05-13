@@ -1,5 +1,6 @@
 # Python
 __pycache__/
+.pytest_cache/
 *.py[cod]
 *$py.class
 *.so
@@ -42,7 +43,6 @@ env/
 
 # Bot data
 config.json
-last_scrape.json
 
 # Logs
 *.log

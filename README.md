@@ -1,12 +1,19 @@
 # SlothusSeeker Discord Bot
 
-A Discord bot that automatically scrapes internship listings from [SimplifyJobs/Summer2026-Internships](https://github.com/SimplifyJobs/Summer2026-Internships) and posts them to configured Discord channels.
+[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-3776AB?style=for-the-badge&logo=python&logoColor=white)](https://www.python.org/)
+[![discord.py](https://img.shields.io/badge/discord.py-2.3%2B-5865F2?style=for-the-badge&logo=discord&logoColor=white)](https://discordpy.readthedocs.io/)
+[![Supabase](https://img.shields.io/badge/supabase-backed-3FCF8E?style=for-the-badge&logo=supabase&logoColor=white)](https://supabase.com/)
+[![UV](https://img.shields.io/badge/managed%20with-uv-DE5FE9?style=for-the-badge)](https://docs.astral.sh/uv/)
+[![GitHub Repo](https://img.shields.io/badge/github-SlothfulDreams%2FSlothusSeeker-181717?style=for-the-badge&logo=github&logoColor=white)](https://github.com/SlothfulDreams/SlothusSeeker)
+
+A Discord bot that automatically scrapes internship listings from [Jobright's 2026 Software Engineer Internship repository](https://github.com/jobright-ai/2026-Software-Engineer-Internship) and posts allow-listed company matches to configured Discord channels.
 
 ## Features
 
 - 🔄 **Automatic Scraping**: Periodically fetches new internship listings (configurable interval)
-- 🎯 **Smart Filtering**: Separates Summer vs Off-Season (Fall/Winter/Spring) internships
+- 🎯 **Smart Filtering**: Separates Spring/Winter, Summer, and Fall internships by season text in the job title
 - 🔔 **Multi-Server Support**: Works across multiple Discord servers with independent configurations
+- 🗄️ **Supabase Config**: Stores Discord server/channel mappings and company allow-lists in Supabase
 - 🚫 **Deduplication**: Tracks posted internships to avoid spam
 - ⚡ **Slash Commands**: Modern Discord slash commands for easy configuration
 - 📊 **Rich Embeds**: Beautiful formatted internship posts with all details
@@ -18,6 +25,7 @@ A Discord bot that automatically scrapes internship listings from [SimplifyJobs/
 - UV package manager
 - Discord Bot Token
 - GitHub Token (optional, for higher rate limits)
+- Supabase project URL and service role key
 
 ## Setup
 
@@ -53,9 +61,19 @@ Edit `.env` and add:
 ```env
 DISCORD_BOT_TOKEN=your_discord_bot_token_here
 GITHUB_TOKEN=your_github_token_here  # Optional
-SCRAPE_INTERVAL_HOURS=1
-TEST_GUILD_ID=your_test_server_id  # Optional, syncs slash commands instantly for development
+SCRAPE_INTERVAL_MINUTES=15
+DEFAULT_SCRAPE_DAYS_BACK=3
+POST_THROTTLE_SECONDS=1.0
+COMPANIES_PER_PAGE=10
+SYNC_COMMANDS_ON_START=false  # Set true only when you intentionally want global command sync on startup
+SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_SERVICE_ROLE_KEY=your_supabase_service_role_key
 ```
+
+Run `supabase/schema.sql` in your Supabase SQL editor before starting the bot.
+Use the service role key because this is a private backend bot and the schema keeps
+row-level security enabled.
+The older publishable/anon Supabase key is not enough for server-side writes.
 
 ### 5. Create a Discord Bot
 
@@ -69,6 +87,7 @@ TEST_GUILD_ID=your_test_server_id  # Optional, syncs slash commands instantly fo
    - Send Messages
    - Embed Links
    - Read Message History
+   - Mention Everyone
 8. Copy the generated URL and use it to invite the bot to your server
 
 ## Running the Bot
@@ -78,6 +97,9 @@ TEST_GUILD_ID=your_test_server_id  # Optional, syncs slash commands instantly fo
 ```bash
 uv run python main.py
 ```
+
+Global command sync is skipped by default to avoid Discord registration rate limits; set
+`SYNC_COMMANDS_ON_START=true` only when you intentionally want startup to sync global commands.
 
 ### Production
 
@@ -89,33 +111,34 @@ All commands are slash commands (`/command`):
 
 ### Configuration Commands (Admin Only)
 
-- `/set_summer_channel <channel>` - Set channel for Summer 2026 internships
-- `/set_offseason_channel <channel>` - Set channel for Fall/Winter/Spring internships
-- `/set_scrape_interval <hours>` - Set how often to scrape for new internships (0.5-168 hours, default: 6 hours)
-- `/set_start_date <days_back>` - Set how far back to scrape internships (1-365 days)
-- `/view_config` - View current channel configuration, interval, and start date
-- `/scrape_now` - Manually trigger an internship scrape with detailed statistics
-- `/test_scrape` - Test the scraper by fetching 5 recent internships (Admin only)
+- `/config set-season-channel <season> <channel>` - Set a Spring/Winter, Summer, or Fall posting channel
+- `/config set-sudo-channel <channel>` - Set the sudo channel ID for this server
+- `/config set-scrape-interval <minutes>` - Set how often to scrape for new internships (10-10080 minutes, default: 15 minutes)
+- `/config set-start-date <days_back>` - Set how far back to scrape internships (1-365 days)
+- `/config view` - View current channel configuration, interval, and start date
+- `/config scrape-now` - Manually trigger an internship scrape with detailed statistics
+- `/companies add <company_name>` - Add a lowercase company allow-list entry
+- `/companies list` - View a paginated embed of allow-listed companies and IDs
+- `/companies delete <company_id>` - Delete a company by ID
 
 ## Usage Example
 
 1. Invite the bot to your Discord server
-2. Run `/set_summer_channel #summer-internships`
-3. Run `/set_offseason_channel #offseason-jobs`
-   - **Note**: Once both channels are configured, the bot triggers an immediate scrape
-   - All matching internships from the last 3 days will be posted
-4. (Optional) Run `/set_start_date 30` to customize how far back to scrape
+2. Run `/config set-season-channel Summer #summer-internships`
+3. Run `/config set-season-channel Fall #fall-internships`
+4. Run `/companies add tesla`
+5. (Optional) Run `/config set-start-date 30` to customize how far back to scrape
    - **Default**: Bot scrapes internships from the last **3 days**
    - Adjust based on your needs (e.g., 7, 14, 30, 60 days)
    - Prevents flooding with old/expired internships
-5. (Optional) Run `/set_scrape_interval 3` to scrape every 3 hours instead of default 6 hours
-6. Wait for the bot to scrape (or run `/scrape_now`)
-7. New internships will be posted automatically!
+6. (Optional) Run `/config set-scrape-interval 180` to scrape every 3 hours instead of default 15 minutes
+7. Wait for the bot to scrape (or run `/config scrape-now`)
+8. New allow-listed internships will be posted automatically!
 
 **Scheduler Behavior:**
-- The bot checks for new internships every 6 hours by default (configurable)
+- The bot checks for new internships every 15 minutes by default (configurable)
 - If no channels are configured, the scheduler skips execution to prevent wasting resources
-- When both posting channels are set up, an immediate scrape is triggered
+- If no companies are configured, the scheduler skips execution
 - Subsequent scrapes only post NEW internships (deduplication prevents spam)
 
 ## Project Structure
@@ -141,35 +164,40 @@ SlothusSeeker/
 └── .env                 # Environment variables (not committed)
 ```
 
-## Data Files
+## Data Storage
 
-The bot creates two JSON files automatically:
+Supabase stores persistent server, company, and posting data:
 
-- `config.json` - Stores channel configurations per server
-- `last_scrape.json` - Tracks posted internships to prevent duplicates
+- `discord_servers` - Discord `guild_id`, server name, season channel IDs, and `sudo_id`
+- `companies` - Lowercase unique company names with numeric IDs
+- `posted_jobs` - Per-guild, per-season posted job IDs for duplicate prevention
 
-Both files persist across restarts and are gitignored.
+The bot also creates a local JSON file automatically:
+
+- `config.json` - Stores global runtime settings such as scrape interval/start date
+
+This file persists across restarts and is gitignored.
 
 ## Filtering Logic
 
 **Date Filtering:**
 - **Default**: Bot only scrapes internships from the last **3 days**
-- Use `/set_start_date <days_back>` to customize the time window (1-365 days)
+- Configure the default with `DEFAULT_SCRAPE_DAYS_BACK`
+- Use `/config set-start-date <days_back>` to customize the time window (1-365 days)
 - Prevents flooding channels with old/expired internships
 - Recommended values: 3-7 days for fresh postings, 30-60 days for broader coverage
 
-**Summer Channel:**
-- Receives internships with "Summer" in the term field
-- Examples: Summer 2026, Summer 2027
+**Season Channels:**
+- Summer and Fall channels receive jobs whose title contains that season name
+- Spring/Winter receives jobs whose title contains either `spring` or `winter`
+- Matching is case-insensitive and requires the season word to appear in the title
+- If a season channel is not configured, matching jobs for that season are skipped
+- Duplicate prevention is tracked in Supabase per guild and season
 
-**Off-Season Channel:**
-- Receives internships with "Fall", "Winter", or "Spring" in the term field
-- Examples: Fall 2025, Winter 2026, Spring 2027
-
-**Both Channels:**
-- Only active internships (`active: true`)
-- Only visible internships (`is_visible: true`)
-- Only internships posted after the start date (if configured)
+**Company Allow-List:**
+- Only companies stored in `companies` are posted
+- Company matching lowercases and normalizes whitespace on both stored names and parsed Jobright names
+- Use `/companies list` to find IDs for deletion
 
 ## Troubleshooting
 
@@ -181,15 +209,16 @@ Both files persist across restarts and are gitignored.
 
 ### No internships being posted
 
-- Check that channels are configured with `/view_config`
+- Check that channels are configured with `/config view`
+- Check that companies are configured with `/companies list`
 - Verify your GitHub token is valid (if using one)
 - Check console logs for errors
-- Try running `/scrape_now` manually
+- Try running `/config scrape-now` manually
 
 ### Rate limiting issues
 
 - Add a GitHub token to your `.env` file for higher rate limits
-- Increase `SCRAPE_INTERVAL_HOURS` to scrape less frequently
+- Increase `SCRAPE_INTERVAL_MINUTES` to scrape less frequently
 
 ## Contributing
 
@@ -201,5 +230,5 @@ MIT License
 
 ## Acknowledgments
 
-- Internship data from [SimplifyJobs/Summer2026-Internships](https://github.com/SimplifyJobs/Summer2026-Internships)
+- Internship data from [jobright-ai/2026-Software-Engineer-Internship](https://github.com/jobright-ai/2026-Software-Engineer-Internship)
 - Built with [discord.py](https://github.com/Rapptz/discord.py)

@@ -1,7 +1,7 @@
 """Retry logic with exponential backoff for network operations."""
 
 import asyncio
-from typing import Awaitable, Callable, Type, TypeVar
+from typing import Awaitable, Callable, TypeVar
 
 from src.utils.logger import setup_logger
 
@@ -15,7 +15,7 @@ async def retry_with_backoff(
     max_retries: int = 3,
     initial_delay: float = 1.0,
     backoff_factor: float = 2.0,
-    exceptions: tuple[Type[Exception], ...] = (Exception,),
+    exceptions: tuple[type[Exception], ...] = (Exception,),
 ) -> T:
     """Retry an async function with exponential backoff.
 
@@ -42,13 +42,16 @@ async def retry_with_backoff(
             last_exception = e
             if attempt < max_retries - 1:
                 logger.warning(
-                    f"Attempt {attempt + 1}/{max_retries} failed: {e}. "
-                    f"Retrying in {delay:.1f}s..."
+                    "Attempt %s/%s failed: %s. Retrying in %.1fs...",
+                    attempt + 1,
+                    max_retries,
+                    e,
+                    delay,
                 )
                 await asyncio.sleep(delay)
                 delay *= backoff_factor
             else:
-                logger.error(f"All {max_retries} attempts failed")
+                logger.error("All %s attempts failed", max_retries)
 
     if last_exception is None:
         raise RuntimeError("retry_with_backoff exhausted without capturing an error")

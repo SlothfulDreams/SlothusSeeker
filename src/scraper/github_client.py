@@ -1,18 +1,164 @@
-"""GitHub client for fetching internship listings."""
+"""GitHub client for fetching Jobright internship listings."""
 
 import asyncio
-import json
-from typing import Dict, List, Optional
+import re
+from datetime import datetime
 
 import aiohttp
 
 from src.config.settings import GITHUB_REPO_URL, GITHUB_TOKEN
-from src.scraper.data_models import Internship, ScrapedData
+from src.scraper.data_models import Internship, SEASONS, ScrapedData, build_job_id
 from src.scraper.exceptions import FetchError, NetworkError, ParseError, RateLimitError
 from src.utils.logger import setup_logger
 from src.utils.retry import retry_with_backoff
 
 logger = setup_logger(__name__)
+
+README_MARKER = "Daily Job List"
+MARKDOWN_LINK_RE = re.compile(r"\[([^\]]+)\]\(([^)]+)\)")
+TABLE_SEPARATOR_RE = re.compile(r"^:?-{3,}:?$")
+WORK_MODE_RE = re.compile(r"\b(On Site|Hybrid|Remote)\b", re.IGNORECASE)
+DATE_RE = re.compile(
+    r"\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)[a-z]*\s+\d{1,2}\b",
+    re.IGNORECASE,
+)
+
+
+def _strip_markdown(value: str) -> str:
+    value = value.replace("<br>", " ")
+    value = re.sub(r"</?[^>]+>", " ", value)
+    value = value.replace("**", "").replace("__", "")
+    value = re.sub(r"\s+", " ", value)
+    return value.strip()
+
+
+def _extract_link(cell: str) -> tuple[str, str]:
+    match = MARKDOWN_LINK_RE.search(cell)
+    if match:
+        return _strip_markdown(match.group(1)), match.group(2).strip()
+    return _strip_markdown(cell), ""
+
+
+def _split_table_row(line: str) -> list[str]:
+    return [cell.strip() for cell in line.strip().strip("|").split("|")]
+
+
+def _is_separator_row(cells: list[str]) -> bool:
+    return all(TABLE_SEPARATOR_RE.match(cell.strip()) for cell in cells if cell)
+
+
+def _parse_date_label(date_label: str) -> int:
+    if not date_label:
+        return 0
+
+    normalized = date_label.replace("Sept", "Sep")
+    for fmt in ("%b %d", "%B %d"):
+        try:
+            parsed = datetime.strptime(normalized, fmt)
+            current_year = datetime.now().year
+            return int(parsed.replace(year=current_year).timestamp())
+        except ValueError:
+            continue
+    return 0
+
+
+def _parse_location_work_date(rest: list[str]) -> tuple[list[str], str, str, int]:
+    text = " ".join(_strip_markdown(cell) for cell in rest if cell).strip()
+    if not text:
+        return [], "", "", 0
+
+    work_model = ""
+    work_match = WORK_MODE_RE.search(text)
+    if work_match:
+        work_model = work_match.group(1).title()
+
+    date_label = ""
+    date_match = DATE_RE.search(text)
+    if date_match:
+        date_label = date_match.group(0)
+
+    location_end = work_match.start() if work_match else len(text)
+    location = text[:location_end].strip(" ,-")
+    locations = [location] if location else []
+
+    return locations, work_model, date_label, _parse_date_label(date_label)
+
+
+def parse_jobright_readme(
+    readme_text: str,
+    start_timestamp: int | None = None,
+) -> ScrapedData:
+    """Parse Jobright README Markdown into season-bucketed internships."""
+    scraped_data = ScrapedData()
+    previous_company_name = ""
+    previous_company_url = ""
+    rows_processed = 0
+    rows_filtered = 0
+
+    for raw_line in readme_text.splitlines():
+        line = raw_line.strip()
+        if not line.startswith("|"):
+            continue
+
+        cells = _split_table_row(line)
+        if len(cells) < 5 or _is_separator_row(cells):
+            continue
+
+        header = [cell.lower() for cell in cells[:5]]
+        if header[:2] == ["company", "job title"]:
+            continue
+
+        company_cell, title_cell, *rest = cells
+        company_name, company_url = _extract_link(company_cell)
+        if company_name == "↳":
+            company_name = previous_company_name
+            company_url = previous_company_url
+        elif company_name:
+            previous_company_name = company_name
+            previous_company_url = company_url
+
+        title, url = _extract_link(title_cell)
+        locations, work_model, date_label, date_posted = _parse_location_work_date(rest)
+
+        if not company_name or not title or not url:
+            continue
+
+        rows_processed += 1
+        internship = Internship(
+            id=build_job_id([company_name, title, url, date_label]),
+            company_name=company_name,
+            title=title,
+            locations=locations,
+            work_model=work_model,
+            url=url,
+            date_posted=date_posted,
+            date_posted_label=date_label,
+            company_url=company_url,
+        )
+
+        if not internship.should_be_posted():
+            continue
+
+        if start_timestamp and date_posted and date_posted < start_timestamp:
+            rows_filtered += 1
+            continue
+
+        scraped_data.add(internship)
+
+    for season in SEASONS:
+        getattr(scraped_data, season).sort(
+            key=lambda item: item.date_posted,
+            reverse=True,
+        )
+
+    logger.info(
+        "Processed %s Jobright rows, filtered %s old rows, found %s season listings",
+        rows_processed,
+        rows_filtered,
+        scraped_data.total_count(),
+    )
+
+    return scraped_data
 
 
 class GitHubClient:
@@ -23,16 +169,12 @@ class GitHubClient:
         self.headers = {}
         if GITHUB_TOKEN:
             self.headers["Authorization"] = f"token {GITHUB_TOKEN}"
-        self._session: Optional[aiohttp.ClientSession] = None
+        self._session: aiohttp.ClientSession | None = None
 
     async def _get_session(self) -> aiohttp.ClientSession:
-        """Get or create aiohttp session with timeout configuration.
-
-        Returns:
-            ClientSession instance with configured timeout
-        """
+        """Get or create aiohttp session with timeout configuration."""
         if self._session is None or self._session.closed:
-            timeout = aiohttp.ClientTimeout(total=30)  # 30 second timeout
+            timeout = aiohttp.ClientTimeout(total=30)
             self._session = aiohttp.ClientSession(headers=self.headers, timeout=timeout)
         return self._session
 
@@ -50,45 +192,25 @@ class GitHubClient:
         """Async context manager exit - ensures session cleanup."""
         await self.close()
 
-    async def _fetch_data(self) -> List[Dict]:
-        """Fetch raw data from GitHub with retries.
-
-        Returns:
-            List of dictionaries containing internship data
-        """
+    async def _fetch_data(self) -> str:
+        """Fetch raw README data from GitHub with retries."""
 
         async def _do_fetch():
             session = await self._get_session()
             async with session.get(self.url) as response:
                 if response.status == 429:
                     raise RateLimitError("GitHub API rate limit exceeded")
-                elif response.status >= 500:
+                if response.status >= 500:
                     raise FetchError(f"GitHub server error: HTTP {response.status}")
-                elif response.status != 200:
+                if response.status != 200:
                     raise FetchError(
                         f"Failed to fetch listings: HTTP {response.status}"
                     )
 
-                # Check content type and parse accordingly
-                content_type = response.headers.get("Content-Type", "")
-                logger.debug(f"Response Content-Type: {content_type}")
-
-                try:
-                    # GitHub raw URLs often return text/plain even for JSON files
-                    if "application/json" in content_type:
-                        # Direct JSON parsing
-                        data = await response.json()
-                    else:
-                        # Text response (common for raw GitHub URLs) - get text then parse
-                        text = await response.text()
-                        logger.debug(f"Received text response, length: {len(text)}")
-                        data = json.loads(text)
-
-                    return data
-                except json.JSONDecodeError as e:
-                    raise ParseError(f"Invalid JSON response: {e}")
-                except Exception as e:
-                    raise ParseError(f"Failed to parse response: {e}")
+                text = await response.text()
+                if README_MARKER not in text:
+                    raise ParseError("Jobright README did not contain Daily Job List")
+                return text
 
         try:
             return await retry_with_backoff(
@@ -101,91 +223,23 @@ class GitHubClient:
                     aiohttp.ClientError,
                 ),
             )
-        except aiohttp.ClientError as e:
-            raise NetworkError(f"Network error: {e}")
+        except aiohttp.ClientError as exc:
+            raise NetworkError(f"Network error: {exc}") from exc
 
-    async def fetch_listings(
-        self, start_timestamp: Optional[int] = None
-    ) -> ScrapedData:
-        """Fetch and parse listings from GitHub.
-
-        Args:
-            start_timestamp: Only include internships posted after this timestamp
-
-        Returns:
-            ScrapedData object with summer and offseason listings separated
-        """
-        # Fetch data from GitHub with retry logic
+    async def fetch_listings(self, start_timestamp: int | None = None) -> ScrapedData:
+        """Fetch and parse listings from GitHub."""
         try:
-            data = await self._fetch_data()
+            readme_text = await self._fetch_data()
         except asyncio.TimeoutError:
             raise NetworkError("Request timed out after 30 seconds")
 
-        # Parse and categorize internships
-        scraped_data = ScrapedData()
-        entries_processed = 0
-        entries_filtered = 0
+        return parse_jobright_readme(readme_text, start_timestamp)
 
-        for item in data:
-            try:
-                internship = Internship(**item)
-                entries_processed += 1
-
-                # Only process active and visible internships
-                if not internship.should_be_posted():
-                    continue
-
-                # Filter by date (but don't break - data is unsorted)
-                if start_timestamp and internship.date_posted < start_timestamp:
-                    entries_filtered += 1
-                    continue  # Skip old entry, keep processing others
-
-                # Categorize by term
-                if internship.is_summer:
-                    scraped_data.summer.append(internship)
-                elif internship.is_offseason:
-                    scraped_data.offseason.append(internship)
-
-            except Exception as e:
-                # Skip invalid entries
-                logger.warning(f"Failed to parse listing: {e}")
-                continue
-
-        # Sort results by date (newest first) since GitHub data is unsorted
-        scraped_data.summer.sort(key=lambda x: x.date_posted, reverse=True)
-        scraped_data.offseason.sort(key=lambda x: x.date_posted, reverse=True)
-
-        logger.info(
-            f"Processed {entries_processed} entries, "
-            f"filtered {entries_filtered} old entries, "
-            f"found {len(scraped_data.summer)} summer + {len(scraped_data.offseason)} off-season"
-        )
-
-        return scraped_data
-
-    async def get_new_listings(
-        self, last_scrape_ids: Dict[str, set], start_timestamp: Optional[int] = None
-    ) -> tuple[ScrapedData, ScrapedData]:
-        """Get only new listings that weren't in the last scrape.
-
-        Args:
-            last_scrape_ids: Dict with 'summer' and 'offseason' keys containing sets of UUIDs
-            start_timestamp: Only include internships posted after this timestamp
-
-        Returns:
-            Tuple of (new_data, all_listings)
-        """
+    async def get_allowlisted_listings(
+        self,
+        company_names: set[str],
+        start_timestamp: int | None = None,
+    ) -> ScrapedData:
+        """Get allow-listed listings from the configured source."""
         all_listings = await self.fetch_listings(start_timestamp)
-
-        # Filter out already-posted listings
-        new_data = ScrapedData()
-
-        for internship in all_listings.summer:
-            if internship.id not in last_scrape_ids.get("summer", set()):
-                new_data.summer.append(internship)
-
-        for internship in all_listings.offseason:
-            if internship.id not in last_scrape_ids.get("offseason", set()):
-                new_data.offseason.append(internship)
-
-        return new_data, all_listings
+        return all_listings.filter_by_companies(company_names)

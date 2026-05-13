@@ -1,77 +1,100 @@
 """Background tasks for periodic scraping."""
 
 import asyncio
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Iterable
-from typing import Optional
 
 import discord
 from discord.ext import commands, tasks
 
 from src.bot.embeds import create_internship_embed
 from src.config.config_manager import ConfigManager
+from src.config.settings import POST_THROTTLE_SECONDS
+from src.scraper.data_models import (
+    SEASON_DISPLAY_NAMES,
+    SEASONS,
+    Internship,
+    ScrapedData,
+)
 from src.scraper.github_client import GitHubClient
-from src.scraper.data_models import ScrapedData
 from src.utils.logger import setup_logger
 
 logger = setup_logger(__name__)
 
-POST_THROTTLE_SECONDS = 1.0
+EVERYONE_MENTION = "@everyone"
+EVERYONE_ALLOWED_MENTIONS = discord.AllowedMentions(everyone=True)
 
 
 @dataclass(slots=True)
 class ScrapeStats:
     """Summary of a scrape/post cycle."""
 
-    summer_posted: int = 0
-    offseason_posted: int = 0
+    posted_by_season: dict[str, int] = field(
+        default_factory=lambda: {season: 0 for season in SEASONS}
+    )
     total_new: int = 0
     errors: int = 0
 
+    @property
+    def total_posted(self) -> int:
+        return sum(self.posted_by_season.values())
+
 
 async def _post_internships(
-    bot: commands.Bot, channel_type: str, channels: list[int], internships: Iterable
-) -> tuple[int, int]:
-    """Post internship embeds to configured channels.
+    bot: commands.Bot,
+    channel_type: str,
+    channel_id: int,
+    internships: Iterable[Internship],
+) -> tuple[list[Internship], int]:
+    """Post internship embeds to one configured channel.
 
     Args:
         bot: Discord bot instance
-        channel_type: Either 'summer' or 'offseason'
-        channels: List of channel IDs to post to
+        channel_type: One of the configured seasons
+        channel_id: Channel ID to post to
         internships: Iterable of internship models to post
 
     Returns:
-        Tuple with (posted_count, error_count)
+        Tuple with successfully posted internships and error count
     """
-    posted_count = 0
+    posted_internships = []
     error_count = 0
     internships = tuple(internships)
 
-    for channel_id in channels:
-        channel = bot.get_channel(channel_id)
-        if not channel:
-            logger.warning(f"Configured {channel_type} channel not found: {channel_id}")
-            continue
-        if not isinstance(channel, discord.abc.Messageable):
-            logger.warning(
-                f"Configured {channel_type} channel is not messageable: {channel_id}"
+    channel = bot.get_channel(channel_id)
+    if not channel:
+        logger.warning("Configured %s channel not found: %s", channel_type, channel_id)
+        return posted_internships, error_count
+    if not isinstance(channel, discord.abc.Messageable):
+        logger.warning(
+            "Configured %s channel is not messageable: %s",
+            channel_type,
+            channel_id,
+        )
+        return posted_internships, error_count
+
+    for internship in internships:
+        embed = create_internship_embed(internship)
+        try:
+            await channel.send(
+                content=EVERYONE_MENTION,
+                embed=embed,
+                allowed_mentions=EVERYONE_ALLOWED_MENTIONS,
             )
-            continue
+            posted_internships.append(internship)
+            await asyncio.sleep(POST_THROTTLE_SECONDS)
+        except Exception as e:
+            error_count += 1
+            logger.error(
+                "Error posting %s internship to channel %s: %s",
+                channel_type,
+                channel_id,
+                e,
+                exc_info=True,
+            )
 
-        for internship in internships:
-            embed = create_internship_embed(internship)
-            try:
-                await channel.send(embed=embed)
-                posted_count += 1
-                await asyncio.sleep(POST_THROTTLE_SECONDS)
-            except Exception as e:
-                error_count += 1
-                logger.error(
-                    f"Error posting {channel_type} internship to channel {channel_id}: {e}",
-                    exc_info=True,
-                )
-
-    return posted_count, error_count
+    return posted_internships, error_count
 
 
 def _log_start_timestamp(start_timestamp: int | None) -> None:
@@ -79,22 +102,27 @@ def _log_start_timestamp(start_timestamp: int | None) -> None:
     if not start_timestamp:
         return
 
-    from datetime import datetime
-
     date_str = datetime.fromtimestamp(start_timestamp).strftime("%Y-%m-%d")
-    logger.info(f"Filtering internships posted after {date_str}")
+    logger.info("Filtering internships posted after %s", date_str)
 
 
-async def _fetch_new_listings(
+async def _fetch_allowlisted_listings(
     config_manager: ConfigManager,
-) -> tuple[ScrapedData, ScrapedData]:
-    """Fetch listings and apply the configured dedupe/date filters."""
-    last_scrape = config_manager.get_last_scrape()
+) -> ScrapedData:
+    """Fetch listings and apply configured company/date filters."""
     start_timestamp = config_manager.get_scrape_start_timestamp()
+    company_names = await config_manager.get_company_names()
     _log_start_timestamp(start_timestamp)
 
+    if not company_names:
+        logger.info("No companies configured. Skipping Jobright fetch.")
+        return ScrapedData()
+
     async with GitHubClient() as github_client:
-        return await github_client.get_new_listings(last_scrape, start_timestamp)
+        return await github_client.get_allowlisted_listings(
+            company_names,
+            start_timestamp,
+        )
 
 
 async def scrape_and_post(
@@ -113,41 +141,66 @@ async def scrape_and_post(
     stats = ScrapeStats()
 
     try:
-        new_listings, all_listings = await _fetch_new_listings(config_manager)
+        allowlisted_listings = await _fetch_allowlisted_listings(config_manager)
+        new_job_keys: set[tuple[str, str]] = set()
 
-        stats.total_new = len(new_listings.summer) + len(new_listings.offseason)
+        for season in SEASONS:
+            listings = getattr(allowlisted_listings, season)
+            destinations = await config_manager.get_channel_destinations(season)
 
-        logger.info(f"Found {len(new_listings.summer)} new summer internships")
-        logger.info(f"Found {len(new_listings.offseason)} new off-season internships")
+            if not destinations:
+                logger.info(
+                    "No %s channel configured. Leaving matching jobs eligible for later.",
+                    SEASON_DISPLAY_NAMES[season].lower(),
+                )
+                continue
 
-        # Post summer internships
-        summer_channels = config_manager.get_all_channels("summer")
-        posted, errors = await _post_internships(
-            bot, "summer", summer_channels, new_listings.summer
-        )
-        stats.summer_posted += posted
-        stats.errors += errors
+            for destination in destinations:
+                posted_ids = await config_manager.get_posted_job_ids(
+                    destination["guild_id"],
+                    season,
+                )
+                pending_listings = [
+                    internship
+                    for internship in listings
+                    if internship.id not in posted_ids
+                ]
+                for internship in pending_listings:
+                    new_job_keys.add((season, internship.id))
 
-        # Post off-season internships
-        offseason_channels = config_manager.get_all_channels("offseason")
-        posted, errors = await _post_internships(
-            bot, "offseason", offseason_channels, new_listings.offseason
-        )
-        stats.offseason_posted += posted
-        stats.errors += errors
+                logger.info(
+                    "Found %s new %s internships for guild %s",
+                    len(pending_listings),
+                    SEASON_DISPLAY_NAMES[season].lower(),
+                    destination["guild_id"],
+                )
 
-        # Update last scrape tracking
-        config_manager.update_last_scrape(
-            summer_ids=all_listings.get_all_ids("summer"),
-            offseason_ids=all_listings.get_all_ids("offseason"),
-        )
+                posted_internships, errors = await _post_internships(
+                    bot,
+                    season,
+                    destination["channel_id"],
+                    pending_listings,
+                )
+                stats.posted_by_season[season] += len(posted_internships)
+                stats.errors += errors
+                if posted_internships:
+                    await config_manager.record_posted_jobs(
+                        destination["guild_id"],
+                        season,
+                        destination["channel_id"],
+                        posted_internships,
+                    )
+
+        stats.total_new = len(new_job_keys)
 
         logger.info(
-            f"Scrape completed: {stats.summer_posted} summer, {stats.offseason_posted} offseason posted"
+            "Scrape completed: %s total posts across %s new listings",
+            stats.total_posted,
+            stats.total_new,
         )
 
     except Exception as e:
-        logger.error(f"Error during scrape: {e}", exc_info=True)
+        logger.error("Error during scrape: %s", e, exc_info=True)
         raise
 
     return stats
@@ -159,24 +212,19 @@ class ScraperTasks(commands.Cog):
     def __init__(self, bot: commands.Bot, config_manager: ConfigManager):
         self.bot = bot
         self.config_manager = config_manager
-        # Get initial interval from config
-        interval_hours = self.config_manager.get_scrape_interval()
-        logger.info(f"Initializing scheduler with interval: {interval_hours} hours")
-        # Set initial interval and start the task
-        self.scrape_task.change_interval(hours=interval_hours)
+        interval_minutes = self.config_manager.get_scrape_interval_minutes()
+        logger.info(
+            "Initializing scheduler with interval: %s minutes",
+            interval_minutes,
+        )
+        self.scrape_task.change_interval(minutes=interval_minutes)
         self.scrape_task.start()
 
-    @tasks.loop(hours=1.0)  # Default interval, will be changed in __init__
+    @tasks.loop(minutes=15.0)  # Default interval, will be changed in __init__
     async def scrape_task(self):
         """Periodic scraping task."""
-        # Check if BOTH channel types are configured before scraping
-        summer_channels = self.config_manager.get_all_channels("summer")
-        offseason_channels = self.config_manager.get_all_channels("offseason")
-
-        if not summer_channels or not offseason_channels:
-            logger.info(
-                "Both summer and offseason channels must be configured. Skipping scheduled scrape"
-            )
+        if not await self.config_manager.has_any_configured_channel():
+            logger.info("No season channels configured. Skipping scheduled scrape")
             return
 
         await scrape_and_post(self.bot, self.config_manager)
@@ -185,29 +233,29 @@ class ScraperTasks(commands.Cog):
     async def before_scrape_task(self):
         """Wait for bot to be ready before starting tasks."""
         await self.bot.wait_until_ready()
-        current_interval = self.scrape_task.hours
-        logger.info(f"Starting periodic scraping (every {current_interval} hours)")
+        current_interval = self.scrape_task.minutes
+        logger.info("Starting periodic scraping every %s minutes", current_interval)
 
     def cog_unload(self):
         """Stop tasks when cog is unloaded."""
         self.scrape_task.cancel()
 
-    async def restart_scraper(self, new_interval_hours: float):
+    async def restart_scraper(self, new_interval_minutes: int):
         """Restart the scraper task with a new interval.
 
         Args:
-            new_interval_hours: New interval in hours
+            new_interval_minutes: New interval in minutes
         """
         logger.info(
-            f"Restarting scheduler with new interval: {new_interval_hours} hours"
+            "Restarting scheduler with new interval: %s minutes",
+            new_interval_minutes,
         )
 
-        # Change interval and restart the task
-        self.scrape_task.change_interval(hours=new_interval_hours)
+        self.scrape_task.change_interval(minutes=new_interval_minutes)
         self.scrape_task.restart()
 
 
-def get_scraper_cog(bot: commands.Bot) -> Optional[ScraperTasks]:
+def get_scraper_cog(bot: commands.Bot) -> ScraperTasks | None:
     """Get the scraper cog instance from the bot.
 
     Args:

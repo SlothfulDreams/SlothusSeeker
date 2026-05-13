@@ -1,12 +1,11 @@
 """Main Discord bot implementation."""
 
-import os
-
 import discord
+from discord import app_commands
 from discord.ext import commands
 
 from src.config.config_manager import ConfigManager
-from src.config.settings import DISCORD_BOT_TOKEN
+from src.config.settings import DISCORD_BOT_TOKEN, SYNC_COMMANDS_ON_START
 from src.utils.logger import setup_logger
 
 logger = setup_logger(__name__)
@@ -24,6 +23,7 @@ class InternshipBot(commands.Bot):
         )
 
         self.config_manager = config_manager
+        self.tree.on_error = self.on_app_command_error
 
     async def setup_hook(self):
         """Setup hook called when the bot starts."""
@@ -38,50 +38,52 @@ class InternshipBot(commands.Bot):
         await self._sync_commands()
 
     async def _sync_commands(self):
-        """Sync slash commands globally or to a development guild."""
-        logger.info("Syncing commands...")
-
-        test_guild_id = os.getenv("TEST_GUILD_ID")
-        if test_guild_id:
-            try:
-                guild_id = int(test_guild_id)
-                guild = discord.Object(id=guild_id)
-                self.tree.copy_global_to(guild=guild)
-                await self.tree.sync(guild=guild)
-                logger.info(
-                    f"Commands synced to test guild {guild_id} ONLY (development mode)"
-                )
-            except ValueError:
-                logger.warning(
-                    f"Invalid TEST_GUILD_ID: {test_guild_id}, falling back to global sync"
-                )
-                await self.tree.sync()
-                logger.info("Commands synced globally")
-        else:
-            await self.tree.sync()
+        """Sync slash commands when explicitly configured."""
+        if not SYNC_COMMANDS_ON_START:
             logger.info(
-                "Commands synced globally (production mode, may take up to 1 hour)"
+                "Skipping command sync. Set SYNC_COMMANDS_ON_START=true to sync global commands."
             )
+            return
+
+        logger.info("Syncing commands globally...")
+        await self.tree.sync()
+        logger.info("Commands synced globally (may take up to 1 hour)")
+
+    async def on_app_command_error(
+        self,
+        interaction: discord.Interaction,
+        error: app_commands.AppCommandError,
+    ) -> None:
+        """Handle uncaught slash command errors with an ephemeral response."""
+        logger.error("Unhandled slash command error: %s", error, exc_info=True)
+        message = "❌ Command failed unexpectedly. Check logs for details."
+
+        try:
+            if interaction.response.is_done():
+                await interaction.followup.send(message, ephemeral=True)
+            else:
+                await interaction.response.send_message(message, ephemeral=True)
+        except discord.HTTPException:
+            logger.exception("Failed to send slash command error response")
 
     async def on_ready(self):
         """Called when the bot is ready."""
-        logger.info(f"Logged in as {self.user} (ID: {self.user.id})")
-        logger.info(f"Connected to {len(self.guilds)} guild(s)")
+        logger.info("Logged in as %s (ID: %s)", self.user, self.user.id)
+        logger.info("Connected to %s guild(s)", len(self.guilds))
         logger.info("Bot is ready!")
 
     async def on_guild_join(self, guild: discord.Guild):
         """Called when the bot joins a new guild."""
-        logger.info(f"Joined new guild: {guild.name} (ID: {guild.id})")
+        logger.info("Joined new guild: %s (ID: %s)", guild.name, guild.id)
 
     async def on_guild_remove(self, guild: discord.Guild):
         """Called when the bot is removed from a guild."""
-        logger.info(f"Removed from guild: {guild.name} (ID: {guild.id})")
+        logger.info("Removed from guild: %s (ID: %s)", guild.name, guild.id)
 
     async def close(self):
         """Cleanup resources before shutdown."""
         logger.info("Bot shutting down, cleaning up resources...")
 
-        # Cancel scheduler task if running
         scraper_cog = self.get_cog("ScraperTasks")
         if scraper_cog:
             scraper_cog.scrape_task.cancel()
