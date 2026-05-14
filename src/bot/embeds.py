@@ -45,11 +45,22 @@ def _format_interval(minutes: int) -> str:
     return f"{hours} hours"
 
 
-def _format_season_description(internship: Internship, season_emoji: str) -> str:
-    season_names = ", ".join(
+_MODALITY_TOKENS = {"remote", "hybrid", "on-site", "onsite", "in-person", "in person"}
+
+
+def _format_season_line(internship: Internship, season_emoji: str) -> str:
+    season_names = " · ".join(
         SEASON_DISPLAY_NAMES[season] for season in internship.seasons
     )
-    return _truncate(f"{season_emoji} {season_names}", EMBED_FIELD_LIMIT)
+    return f"{season_emoji} **{season_names}**"
+
+
+def _geographic_locations(internship: Internship) -> str:
+    filtered = [
+        loc for loc in internship.locations
+        if loc.strip().lower() not in _MODALITY_TOKENS
+    ]
+    return ", ".join(filtered)
 
 
 def create_internship_embed(internship: Internship) -> discord.Embed:
@@ -71,33 +82,31 @@ def create_internship_embed(internship: Internship) -> discord.Embed:
         color = discord.Color.green()
         season_emoji = "🌱"
 
-    title = _truncate(
-        f"{internship.company_name} - {internship.title}", EMBED_TITLE_LIMIT
-    )
+    title = _truncate(internship.title, EMBED_TITLE_LIMIT)
+
+    season_line = _format_season_line(internship, season_emoji)
+    if internship.work_model:
+        season_line = f"{season_line}  ·  🏢 {_truncate(internship.work_model, 80)}"
+
+    description_lines = [season_line]
+
+    geo = _geographic_locations(internship)
+    if geo:
+        description_lines.append(f"📍 {_truncate(geo, 300)}")
+
+    description_lines.append(f"📅 {internship.posted_date_str}")
 
     embed = discord.Embed(
         title=title,
         url=internship.url,
         color=color,
-        description=_format_season_description(internship, season_emoji),
+        description=_truncate("\n".join(description_lines), EMBED_DESCRIPTION_LIMIT),
     )
 
-    embed.add_field(
-        name="📍 Location",
-        value=_truncate(internship.location_str, EMBED_FIELD_LIMIT),
-        inline=True,
-    )
-
-    embed.add_field(
-        name="📅 Posted", value=internship.posted_date_str, inline=True
-    )
-
-    if internship.work_model:
-        embed.add_field(
-            name="🏢 Work Model",
-            value=_truncate(internship.work_model, EMBED_FIELD_LIMIT),
-            inline=True,
-        )
+    author_kwargs = {"name": _truncate(internship.company_name, 256)}
+    if internship.company_url:
+        author_kwargs["url"] = internship.company_url
+    embed.set_author(**author_kwargs)
 
     embed.set_footer(text=f"ID: {internship.id}")
 
