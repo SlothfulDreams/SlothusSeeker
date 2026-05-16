@@ -18,6 +18,25 @@ from src.scraper.data_models import Internship, SEASONS, normalize_company_name
 SupabaseRow = dict[str, Any]
 
 
+def _posted_job_row(
+    guild_id: str,
+    season: str,
+    channel_id: int,
+    internship: Internship,
+) -> SupabaseRow:
+    return {
+        "job_id": internship.id,
+        "guild_id": str(guild_id),
+        "season": season,
+        "channel_id": str(channel_id),
+        "company_name": internship.company_name,
+        "title": internship.title,
+        "url": internship.url,
+        "job_year": internship.job_year,
+        "date_posted_label": internship.date_posted_label,
+    }
+
+
 class ConfigManager:
     """Manages Supabase channel mappings, companies, posted jobs, and settings."""
 
@@ -197,16 +216,7 @@ class ConfigManager:
             return
 
         rows = [
-            {
-                "job_id": internship.id,
-                "guild_id": str(guild_id),
-                "season": season,
-                "channel_id": str(channel_id),
-                "company_name": internship.company_name,
-                "title": internship.title,
-                "url": internship.url,
-                "date_posted_label": internship.date_posted_label,
-            }
+            _posted_job_row(guild_id, season, channel_id, internship)
             for internship in internships
         ]
         await self._execute(

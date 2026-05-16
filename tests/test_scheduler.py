@@ -1,5 +1,6 @@
 import pytest
 
+from src.config.config_manager import _posted_job_row
 from src.scheduler import tasks
 from src.scraper.data_models import Internship, ScrapedData
 
@@ -13,6 +14,7 @@ def _internship(job_id: str, title: str) -> Internship:
         company_name="Tesla",
         title=title,
         url=f"https://jobright.ai/jobs/{job_id}",
+        job_year="2026",
     )
 
 
@@ -140,3 +142,9 @@ async def test_post_internships_mentions_everyone(monkeypatch):
     assert errors == 0
     assert channel.sent_messages[0]["content"] == "@everyone"
     assert channel.sent_messages[0]["allowed_mentions"].everyone is True
+
+
+def test_posted_job_row_includes_job_year():
+    row = _posted_job_row(GUILD_ID, "summer", CHANNEL_ID, _internship("job-1", "Title"))
+
+    assert row["job_year"] == "2026"

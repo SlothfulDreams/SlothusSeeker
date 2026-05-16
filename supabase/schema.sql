@@ -33,6 +33,7 @@ create table if not exists public.posted_jobs (
   company_name text not null,
   title text not null,
   url text not null,
+  job_year text,
   date_posted_label text,
   posted_at timestamptz not null default now(),
   constraint posted_jobs_season_check
@@ -49,6 +50,9 @@ create index if not exists posted_jobs_job_id_idx
 
 create index if not exists posted_jobs_posted_at_idx
   on public.posted_jobs (posted_at);
+
+create index if not exists posted_jobs_job_year_idx
+  on public.posted_jobs (job_year);
 
 alter table public.discord_servers enable row level security;
 alter table public.companies enable row level security;

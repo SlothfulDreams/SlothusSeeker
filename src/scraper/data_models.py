@@ -3,7 +3,6 @@
 import hashlib
 import re
 from datetime import datetime
-from typing import Iterable
 
 from pydantic import BaseModel, Field
 
@@ -22,6 +21,93 @@ SEASON_PATTERNS = {
     season: re.compile(rf"\b({'|'.join(words)})\b", re.IGNORECASE)
     for season, words in SEASON_MATCH_WORDS.items()
 }
+YEAR_RE = re.compile(r"\b20\d{2}\b")
+SEASON_IDENTITY_WORDS = {
+    word for words in SEASON_MATCH_WORDS.values() for word in words
+}
+JOB_TITLE_STOP_WORDS = {
+    "intern",
+    "internship",
+    "co",
+    "op",
+    "coop",
+    "student",
+}
+LOCATION_EXACT_ALIASES = {
+    "nyc": "new york ny",
+    "new york city": "new york ny",
+    "new york new york": "new york ny",
+    "sf": "san francisco ca",
+    "san francisco california": "san francisco ca",
+    "remote in usa": "remote us",
+    "remote in us": "remote us",
+    "remote united states": "remote us",
+    "remote in united states": "remote us",
+}
+US_STATE_ALIASES = {
+    "alabama": "al",
+    "alaska": "ak",
+    "arizona": "az",
+    "arkansas": "ar",
+    "california": "ca",
+    "colorado": "co",
+    "connecticut": "ct",
+    "delaware": "de",
+    "district of columbia": "dc",
+    "florida": "fl",
+    "georgia": "ga",
+    "hawaii": "hi",
+    "idaho": "id",
+    "illinois": "il",
+    "indiana": "in",
+    "iowa": "ia",
+    "kansas": "ks",
+    "kentucky": "ky",
+    "louisiana": "la",
+    "maine": "me",
+    "maryland": "md",
+    "massachusetts": "ma",
+    "michigan": "mi",
+    "minnesota": "mn",
+    "mississippi": "ms",
+    "missouri": "mo",
+    "montana": "mt",
+    "nebraska": "ne",
+    "nevada": "nv",
+    "new hampshire": "nh",
+    "new jersey": "nj",
+    "new mexico": "nm",
+    "new york": "ny",
+    "north carolina": "nc",
+    "north dakota": "nd",
+    "ohio": "oh",
+    "oklahoma": "ok",
+    "oregon": "or",
+    "pennsylvania": "pa",
+    "rhode island": "ri",
+    "south carolina": "sc",
+    "south dakota": "sd",
+    "tennessee": "tn",
+    "texas": "tx",
+    "utah": "ut",
+    "vermont": "vt",
+    "virginia": "va",
+    "washington": "wa",
+    "west virginia": "wv",
+    "wisconsin": "wi",
+    "wyoming": "wy",
+}
+US_REGION_COMPONENT_ALIASES = {
+    **US_STATE_ALIASES,
+    **{abbreviation: abbreviation for abbreviation in US_STATE_ALIASES.values()},
+}
+US_COUNTRY_COMPONENT_ALIASES = {
+    "usa": "us",
+    "us": "us",
+    "u s": "us",
+    "united states": "us",
+    "united states of america": "us",
+}
 
 
 def normalize_company_name(company_name: str) -> str:
@@ -30,15 +116,99 @@ def normalize_company_name(company_name: str) -> str:
     return cleaned.lower()
 
 
+def _normalize_identity_text(value: str) -> str:
+    cleaned = value.strip().lower()
+    cleaned = cleaned.replace("&", " and ")
+    cleaned = YEAR_RE.sub(" ", cleaned)
+    cleaned = re.sub(r"[^a-z0-9]+", " ", cleaned)
+    return re.sub(r"\s+", " ", cleaned).strip()
+
+
+def normalize_job_title(title: str) -> str:
+    """Normalize role titles for cross-source duplicate detection."""
+    normalized = _normalize_identity_text(title)
+    ignored_words = JOB_TITLE_STOP_WORDS | SEASON_IDENTITY_WORDS
+    words = [word for word in normalized.split() if word not in ignored_words]
+    return " ".join(words)
+
+
+def _location_components(location: str) -> list[str]:
+    return [
+        normalized
+        for component in re.split(r"[,;/\n]+", location)
+        if (normalized := _normalize_identity_text(component))
+    ]
+
+
+def normalize_location(location: str) -> str:
+    """Normalize locations for cross-source duplicate detection."""
+    normalized = _normalize_identity_text(location)
+    if normalized in LOCATION_EXACT_ALIASES:
+        return LOCATION_EXACT_ALIASES[normalized]
+
+    components = _location_components(location)
+    if len(components) <= 1:
+        return (
+            US_COUNTRY_COMPONENT_ALIASES.get(normalized)
+            or US_REGION_COMPONENT_ALIASES.get(normalized)
+            or normalized
+        )
+
+    country = US_COUNTRY_COMPONENT_ALIASES.get(components[-1])
+    if country:
+        components = components[:-1]
+
+    region = US_REGION_COMPONENT_ALIASES.get(components[-1])
+    if region:
+        components[-1] = region
+
+    if country:
+        components.append(country)
+
+    return " ".join(components)
+
+
+def infer_job_year(title: str, terms: list[str] | None = None) -> str:
+    """Return the title year, falling back to source terms when needed."""
+    title_years = set(YEAR_RE.findall(title))
+    fallback_years = set(YEAR_RE.findall(" ".join(terms or [])))
+    return ",".join(sorted(title_years or fallback_years))
+
+
+def _location_key(locations: list[str] | None) -> str:
+    normalized_locations = {
+        normalized
+        for location in locations or []
+        if (normalized := normalize_location(location))
+    }
+    return ",".join(sorted(normalized_locations))
+
+
 def detect_seasons(title: str) -> list[str]:
     """Return seasons explicitly mentioned in the job title."""
     return [season for season in SEASONS if SEASON_PATTERNS[season].search(title)]
 
 
-def build_job_id(parts: Iterable[str]) -> str:
-    """Build a stable ID from Jobright row fields."""
-    normalized = "|".join(part.strip().lower() for part in parts)
-    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+def build_job_id(
+    company_name: str,
+    title: str,
+    locations: list[str] | None = None,
+    terms: list[str] | None = None,
+) -> str:
+    """Build a stable cross-source ID from canonical job identity fields."""
+    identity = "|".join(
+        [
+            _normalize_identity_text(company_name),
+            normalize_job_title(title),
+            _location_key(locations),
+            infer_job_year(title, terms),
+        ]
+    )
+    return hashlib.sha256(identity.encode("utf-8")).hexdigest()
+
+
+def _unique_known_seasons(seasons: list[str]) -> list[str]:
+    return [season for season in SEASONS if season in seasons]
 
 
 class Internship(BaseModel):
@@ -53,6 +223,9 @@ class Internship(BaseModel):
     date_posted: int = 0
     date_posted_label: str = ""
     company_url: str = ""
+    job_year: str = ""
+    season_tags: list[str] = Field(default_factory=list)
+    source: str = ""
 
     @property
     def company_key(self) -> str:
@@ -62,7 +235,7 @@ class Internship(BaseModel):
     @property
     def seasons(self) -> list[str]:
         """Seasons explicitly present in the title."""
-        return detect_seasons(self.title)
+        return _unique_known_seasons(self.season_tags) or detect_seasons(self.title)
 
     @property
     def primary_season(self) -> str | None:

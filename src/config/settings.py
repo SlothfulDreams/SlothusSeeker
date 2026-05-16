@@ -11,6 +11,14 @@ JOBRIGHT_README_URL = (
     "https://raw.githubusercontent.com/jobright-ai/"
     "2026-Software-Engineer-Internship/master/README.md"
 )
+SIMPLIFY_SUMMER_README_URL = (
+    "https://raw.githubusercontent.com/SimplifyJobs/"
+    "Summer2026-Internships/dev/README.md"
+)
+SIMPLIFY_OFF_SEASON_README_URL = (
+    "https://raw.githubusercontent.com/SimplifyJobs/"
+    "Summer2026-Internships/dev/README-Off-Season.md"
+)
 
 
 def _get_required(name: str) -> str:
@@ -55,6 +63,14 @@ DISCORD_BOT_TOKEN = _get_required("DISCORD_BOT_TOKEN")
 # GitHub Configuration
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")  # Optional
 GITHUB_REPO_URL = os.getenv("GITHUB_REPO_URL", JOBRIGHT_README_URL)
+SIMPLIFY_SUMMER_REPO_URL = os.getenv(
+    "SIMPLIFY_SUMMER_REPO_URL",
+    SIMPLIFY_SUMMER_README_URL,
+)
+SIMPLIFY_OFF_SEASON_REPO_URL = os.getenv(
+    "SIMPLIFY_OFF_SEASON_REPO_URL",
+    SIMPLIFY_OFF_SEASON_README_URL,
+)
 
 # Supabase Configuration
 SUPABASE_URL = os.getenv("SUPABASE_URL")
