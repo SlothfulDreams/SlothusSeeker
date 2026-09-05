@@ -35,6 +35,9 @@ class FakeConfigManager:
         ])
 
     async def record_posted_jobs(self, guild_id, season, channel_id, internships):
+        self.posted_ids.setdefault((guild_id, season), set()).update(
+            internship.id for internship in internships
+        )
         self.recorded_jobs.append(
             {
                 "guild_id": guild_id,
@@ -72,7 +75,11 @@ def _stub_scrape_source(monkeypatch, listings: ScrapedData) -> None:
     async def fake_fetch_allowlisted_listings(_config_manager):
         return listings
 
-    async def fake_post_internships(_bot, _season, _channel_id, internships):
+    async def fake_post_internships(
+        _bot, _season, _channel_id, internships, *, config_manager, guild_id
+    ):
+        for internship in internships:
+            await config_manager.record_posted_jobs(guild_id, _season, _channel_id, [internship])
         return list(internships), 0
 
     monkeypatch.setattr(
@@ -139,6 +146,8 @@ async def test_post_internships_mentions_everyone(monkeypatch):
         "summer",
         CHANNEL_ID,
         [internship],
+        config_manager=FakeConfigManager(),
+        guild_id=GUILD_ID,
     )
 
     assert posted == [internship]

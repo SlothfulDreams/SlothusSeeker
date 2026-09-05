@@ -41,11 +41,18 @@ class ScrapeStats:
         return sum(self.posted_by_season.values())
 
 
+class DeliveryRecordingError(RuntimeError):
+    """Discord accepted a message but its deduplication checkpoint failed."""
+
+
 async def _post_internships(
     bot: commands.Bot,
     channel_type: str,
     channel_id: int,
     internships: Iterable[Internship],
+    *,
+    config_manager: ConfigManager,
+    guild_id: str,
 ) -> tuple[list[Internship], int]:
     """Post internship embeds to one configured channel.
 
@@ -54,6 +61,8 @@ async def _post_internships(
         channel_type: One of the configured seasons
         channel_id: Channel ID to post to
         internships: Iterable of internship models to post
+        config_manager: Persists each successful delivery
+        guild_id: Guild owning the destination's posting history
 
     Returns:
         Tuple with successfully posted internships and error count
@@ -82,8 +91,6 @@ async def _post_internships(
                 embed=embed,
                 allowed_mentions=EVERYONE_ALLOWED_MENTIONS,
             )
-            posted_internships.append(internship)
-            await asyncio.sleep(POST_THROTTLE_SECONDS)
         except Exception as e:
             error_count += 1
             logger.error(
@@ -93,6 +100,21 @@ async def _post_internships(
                 e,
                 exc_info=True,
             )
+            continue
+
+        # Checkpoint before throttling or sending anything else. A write failure
+        # must not be treated as a failed send and followed by more untracked posts.
+        try:
+            await config_manager.record_posted_jobs(
+                guild_id, channel_type, channel_id, [internship]
+            )
+        except Exception as exc:
+            raise DeliveryRecordingError(
+                f"Sent job {internship.id} to channel {channel_id}, but could not "
+                "record the delivery. Remaining batch stopped."
+            ) from exc
+        posted_internships.append(internship)
+        await asyncio.sleep(POST_THROTTLE_SECONDS)
 
     return posted_internships, error_count
 
@@ -180,16 +202,11 @@ async def scrape_and_post(
                     season,
                     destination["channel_id"],
                     pending_listings,
+                    config_manager=config_manager,
+                    guild_id=destination["guild_id"],
                 )
                 stats.posted_by_season[season] += len(posted_internships)
                 stats.errors += errors
-                if posted_internships:
-                    await config_manager.record_posted_jobs(
-                        destination["guild_id"],
-                        season,
-                        destination["channel_id"],
-                        posted_internships,
-                    )
 
         stats.total_new = len(new_job_keys)
 

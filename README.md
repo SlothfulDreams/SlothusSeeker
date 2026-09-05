@@ -194,6 +194,11 @@ Existing records are retained: matching checks canonical IDs, legacy ID aliases,
 and exact saved source URLs with matching company, normalized title, and job year.
 Aliases from merged feed entries are kept for matching, even when only one embed is posted.
 
+Each successful Discord delivery is recorded before the next message or throttle
+delay. If recording fails after a send, the batch stops with an error. A process
+crash between Discord accepting the message and its database checkpoint can still
+cause that message to be reposted; this is not an exactly-once delivery guarantee.
+
 Older records do not contain locations, so a complete historical ID migration is
 not possible. Compatibility matching is conservative; unrelated jobs are not
 merged merely because their company and title match. No history reset is needed.
