@@ -54,7 +54,7 @@ README_SAMPLE_ROWS = [
     (
         "[Snowflake](https://www.snowflake.com)",
         "[Software Engineer Intern - Winter 2026](https://jobright.ai/jobs/5)",
-        "Remote",
+        "Remote in USA",
         "Remote",
         "May 12",
     ),

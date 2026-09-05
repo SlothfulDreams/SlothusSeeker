@@ -109,9 +109,18 @@ def _parse_age_label(age_label: str) -> int:
 
 
 def _parse_location_work_date(rest: list[str]) -> tuple[list[str], str, str, int]:
-    text = " ".join(_strip_markdown(cell) for cell in rest if cell).strip()
-    if not text:
+    if not rest:
         return [], "", "", 0
+
+    # Read the location column independently: searching the combined row for
+    # "Remote" used to discard country qualifiers such as "Remote in USA".
+    location_cell = re.sub(r"<br\s*/?>", "\n", rest[0], flags=re.IGNORECASE)
+    locations = [
+        location
+        for line in location_cell.splitlines()
+        if (location := _strip_markdown(line))
+    ]
+    text = " ".join(_strip_markdown(cell) for cell in rest[1:] if cell).strip()
 
     work_model = ""
     work_match = WORK_MODE_RE.search(text)
@@ -122,10 +131,6 @@ def _parse_location_work_date(rest: list[str]) -> tuple[list[str], str, str, int
     date_match = DATE_RE.search(text)
     if date_match:
         date_label = date_match.group(0)
-
-    location_end = work_match.start() if work_match else len(text)
-    location = text[:location_end].strip(" ,-")
-    locations = [location] if location else []
 
     return locations, work_model, date_label, _parse_date_label(date_label)
 

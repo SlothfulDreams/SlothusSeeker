@@ -188,6 +188,13 @@ This file persists across restarts and is gitignored.
 
 ## Filtering Logic
 
+**US-Only Locations (all feeds):**
+- Jobright, Simplify Summer, and Simplify Off-Season use the same location check
+- Only listings whose locations are all identifiable as US-based are eligible
+- US-qualified remote roles (e.g. `Remote in USA`) are included
+- Foreign, mixed-country, missing, and ambiguous locations (including bare `Remote`) are excluded
+- US country labels, city/state pairs, state names, and common feed shorthand (`NYC`, `SF`, `LA`, `South SF`) are recognized; unknown city-only labels are excluded rather than guessed
+
 **Date Filtering:**
 - **Default**: Bot only scrapes internships from the last **3 days**
 - Configure the default with `DEFAULT_SCRAPE_DAYS_BACK`

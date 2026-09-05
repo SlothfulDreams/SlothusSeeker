@@ -168,6 +168,49 @@ def normalize_location(location: str) -> str:
     return " ".join(components)
 
 
+def is_us_location(location: str) -> bool:
+    """Recognize explicit US locations, not arbitrary cities or bare Remote."""
+    # Work arrangement is not country evidence. Keep any geographic qualifier.
+    location = re.sub(
+        r"\b(?:remote|hybrid|on[ -]?site|in[ -]person)\b",
+        "",
+        location,
+        flags=re.IGNORECASE,
+    )
+    location = re.sub(r"^\s*in\s+", "", location, flags=re.IGNORECASE)
+    location = location.replace(".", "").strip(" ,()-")
+    components = _location_components(location)
+    if not components:
+        return False
+
+    if components[-1] in US_COUNTRY_COMPONENT_ALIASES:
+        # Country alone, city/state + country, or city + state + country.
+        return len(components) <= 2 or (
+            len(components) == 3
+            and components[-2] in US_REGION_COMPONENT_ALIASES
+        )
+
+    if len(components) == 2:
+        return components[-1] in US_REGION_COMPONENT_ALIASES
+
+    if len(components) == 1:
+        name = components[0]
+        # Georgia alone could mean the country; bare state codes are ambiguous.
+        return name in (US_STATE_ALIASES.keys() - {"georgia"}) or name in {
+            "nyc", "new york city", "sf", "south sf", "la",
+        }
+    return False
+
+
+def locations_are_us_only(locations: list[str]) -> bool:
+    """Fail closed for missing, foreign, mixed-country, or unknown locations."""
+    return bool(locations) and all(
+        is_us_location(part)
+        for location in locations
+        for part in re.split(r"[;/\n]+", location)
+    )
+
+
 def infer_job_year(title: str, terms: list[str] | None = None) -> str:
     """Return the title year, falling back to source terms when needed."""
     title_years = set(YEAR_RE.findall(title))
@@ -260,8 +303,8 @@ class Internship(BaseModel):
         return ", ".join(self.locations)
 
     def should_be_posted(self) -> bool:
-        """Check if this internship has enough data to post to Discord."""
-        return bool(self.url and self.seasons)
+        """Require a URL, a season, and confirmed US-only locations."""
+        return bool(self.url and self.seasons and locations_are_us_only(self.locations))
 
 
 class ScrapedData(BaseModel):
