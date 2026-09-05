@@ -108,7 +108,8 @@ def create_internship_embed(internship: Internship) -> discord.Embed:
         author_kwargs["url"] = internship.company_url
     embed.set_author(**author_kwargs)
 
-    embed.set_footer(text=f"ID: {internship.id}")
+    source = internship.source.strip() or "Unknown"
+    embed.set_footer(text=f"Source: {source} · ID: {internship.id}")
 
     return embed
 

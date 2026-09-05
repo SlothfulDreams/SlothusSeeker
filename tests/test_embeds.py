@@ -1,4 +1,31 @@
-from src.bot.embeds import create_company_list_embed
+import pytest
+
+from src.bot.embeds import create_company_list_embed, create_internship_embed
+from src.scraper.data_models import Internship
+
+
+@pytest.mark.parametrize(
+    ("source", "label"),
+    [
+        ("Jobright", "Jobright"),
+        ("Simplify Summer", "Simplify Summer"),
+        ("Simplify Off-Season", "Simplify Off-Season"),
+        ("", "Unknown"),
+        ("   ", "Unknown"),
+    ],
+)
+def test_internship_embed_footer_shows_source_and_id(source, label):
+    internship = Internship(
+        id="test-id",
+        company_name="Example",
+        title="Summer Software Intern",
+        url="https://example.com/job",
+        source=source,
+    )
+
+    embed = create_internship_embed(internship)
+
+    assert embed.footer.text == f"Source: {label} · ID: test-id"
 
 
 def test_company_list_embed_paginates_companies():
