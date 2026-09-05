@@ -71,6 +71,24 @@ class ConfigManager:
         response = await asyncio.to_thread(query.execute)
         return response.data
 
+    async def _read_pages(
+        self, table: str, columns: str, **filters: str
+    ) -> list[SupabaseRow]:
+        """Read ID-ordered pages until empty, including under server response caps."""
+        rows = []
+        cursor = None
+        while True:
+            query = self.client.table(table).select(columns).order("id").limit(500)
+            for key, value in filters.items():
+                query = query.eq(key, value)
+            if cursor is not None:
+                query = query.gt("id", cursor)
+            page = await self._execute(query)
+            if not page:
+                return rows
+            rows.extend(page)
+            cursor = page[-1]["id"]
+
     # Supabase server/channel configuration methods
     async def get_guild_config(self, guild_id: int) -> SupabaseRow:
         """Get configuration for a specific guild."""
@@ -167,10 +185,7 @@ class ConfigManager:
 
     async def list_companies(self) -> list[SupabaseRow]:
         """List companies ordered by ID."""
-        rows = await self._execute(
-            self.client.table("companies").select("id,company_name").order("id")
-        )
-        return rows or []
+        return await self._read_pages("companies", "id,company_name")
 
     async def delete_company(self, company_id: int) -> bool:
         """Delete a company by ID."""
@@ -184,9 +199,7 @@ class ConfigManager:
 
     async def get_company_names(self) -> set[str]:
         """Return normalized allow-listed company names."""
-        rows = await self._execute(
-            self.client.table("companies").select("company_name")
-        )
+        rows = await self.list_companies()
         return {
             normalize_company_name(row["company_name"])
             for row in rows or []
@@ -196,11 +209,8 @@ class ConfigManager:
     # Supabase posted job tracking methods
     async def get_posted_job_ids(self, guild_id: str, season: str) -> set[str]:
         """Return job IDs already posted to a guild for a season."""
-        rows = await self._execute(
-            self.client.table("posted_jobs")
-            .select("job_id")
-            .eq("guild_id", str(guild_id))
-            .eq("season", season)
+        rows = await self._read_pages(
+            "posted_jobs", "id,job_id", guild_id=str(guild_id), season=season
         )
         return {row["job_id"] for row in rows or [] if row.get("job_id")}
 
