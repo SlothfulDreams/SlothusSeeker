@@ -1,6 +1,6 @@
 import pytest
 
-from src.config.config_manager import _posted_job_row
+from src.config.config_manager import PostedJobHistory, _posted_job_row
 from src.scheduler import tasks
 from src.scraper.data_models import Internship, ScrapedData
 
@@ -28,8 +28,11 @@ class FakeConfigManager:
             return [{"guild_id": GUILD_ID, "channel_id": CHANNEL_ID}]
         return []
 
-    async def get_posted_job_ids(self, guild_id, season):
-        return self.posted_ids.get((guild_id, season), set())
+    async def get_posted_history(self, guild_id, season):
+        return PostedJobHistory([
+            {"job_id": job_id}
+            for job_id in self.posted_ids.get((guild_id, season), set())
+        ])
 
     async def record_posted_jobs(self, guild_id, season, channel_id, internships):
         self.recorded_jobs.append(

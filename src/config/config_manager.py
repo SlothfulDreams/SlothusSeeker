@@ -13,7 +13,9 @@ from src.config.settings import (
     SUPABASE_SERVICE_ROLE_KEY,
     SUPABASE_URL,
 )
-from src.scraper.data_models import Internship, SEASONS, normalize_company_name
+from src.scraper.data_models import (
+    Internship, SEASONS, infer_job_year, normalize_company_name, normalize_job_title,
+)
 
 SupabaseRow = dict[str, Any]
 
@@ -35,6 +37,35 @@ def _posted_job_row(
         "job_year": internship.job_year,
         "date_posted_label": internship.date_posted_label,
     }
+
+
+class PostedJobHistory:
+    """Indexed history scoped by the database query to one guild and season."""
+
+    def __init__(self, rows: list[SupabaseRow]):
+        self.ids = {row["job_id"] for row in rows if row.get("job_id")}
+        self.url_keys = {
+            self._url_key(
+                row["url"], row["company_name"], row["title"],
+                row.get("job_year") or infer_job_year(row["title"]),
+            )
+            for row in rows
+            if row.get("url") and row.get("company_name") and row.get("title")
+        }
+
+    @staticmethod
+    def _url_key(url: str, company: str, title: str, year: str) -> tuple[str, ...]:
+        return (url, normalize_company_name(company), normalize_job_title(title), year)
+
+    def contains(self, internship: Internship) -> bool:
+        if self.ids & (internship.legacy_ids | {internship.id}):
+            return True
+        year = internship.job_year or infer_job_year(internship.title)
+        return any(
+            self._url_key(url, internship.company_name, internship.title, year)
+            in self.url_keys
+            for url in internship.source_urls | {internship.url}
+        )
 
 
 class ConfigManager:
@@ -213,6 +244,14 @@ class ConfigManager:
             "posted_jobs", "id,job_id", guild_id=str(guild_id), season=season
         )
         return {row["job_id"] for row in rows or [] if row.get("job_id")}
+
+    async def get_posted_history(self, guild_id: str, season: str) -> PostedJobHistory:
+        """Read complete legacy and canonical identity evidence for a destination."""
+        rows = await self._read_pages(
+            "posted_jobs", "id,job_id,url,company_name,title,job_year",
+            guild_id=str(guild_id), season=season,
+        )
+        return PostedJobHistory(rows)
 
     async def record_posted_jobs(
         self,

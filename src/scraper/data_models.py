@@ -140,8 +140,8 @@ def _location_components(location: str) -> list[str]:
     ]
 
 
-def normalize_location(location: str) -> str:
-    """Normalize locations for cross-source duplicate detection."""
+def _normalize_location_v1(location: str) -> str:
+    """Original location identity format, retained for posted-history matching."""
     normalized = _normalize_identity_text(location)
     if normalized in LOCATION_EXACT_ALIASES:
         return LOCATION_EXACT_ALIASES[normalized]
@@ -166,6 +166,25 @@ def normalize_location(location: str) -> str:
         components.append(country)
 
     return " ".join(components)
+
+
+def normalize_location(location: str) -> str:
+    """Canonicalize equivalent US locations without merging distinct places."""
+    normalized = _normalize_identity_text(location.replace(".", ""))
+    remote_country = re.fullmatch(r"remote(?: in)? (.+)|(.+) remote", normalized)
+    if remote_country:
+        country = remote_country.group(1) or remote_country.group(2)
+        if country in US_COUNTRY_COMPONENT_ALIASES:
+            return "remote us"
+
+    components = _location_components(location)
+    if len(components) > 1 and (
+        components[-1] in US_COUNTRY_COMPONENT_ALIASES or components[-1] == "u s a"
+    ):
+        without_country = _normalize_location_v1(",".join(components[:-1]))
+        if without_country.split()[-1] in US_REGION_COMPONENT_ALIASES:
+            return without_country
+    return _normalize_location_v1(location)
 
 
 def is_us_location(location: str) -> bool:
@@ -218,11 +237,11 @@ def infer_job_year(title: str, terms: list[str] | None = None) -> str:
     return ",".join(sorted(title_years or fallback_years))
 
 
-def _location_key(locations: list[str] | None) -> str:
+def _location_key(locations: list[str] | None, normalizer=normalize_location) -> str:
     normalized_locations = {
         normalized
         for location in locations or []
-        if (normalized := normalize_location(location))
+        if (normalized := normalizer(location))
     }
     return ",".join(sorted(normalized_locations))
 
@@ -237,17 +256,37 @@ def build_job_id(
     title: str,
     locations: list[str] | None = None,
     terms: list[str] | None = None,
+    *,
+    location_normalizer=normalize_location,
 ) -> str:
     """Build a stable cross-source ID from canonical job identity fields."""
     identity = "|".join(
         [
             _normalize_identity_text(company_name),
             normalize_job_title(title),
-            _location_key(locations),
+            _location_key(locations, location_normalizer),
             infer_job_year(title, terms),
         ]
     )
     return hashlib.sha256(identity.encode("utf-8")).hexdigest()
+
+
+def build_legacy_job_ids(
+    company_name: str, title: str, locations: list[str], terms: list[str] | None = None
+) -> set[str]:
+    """Match v1 raw locations and its common explicit-US country variant."""
+    def with_country(location: str) -> str:
+        normalized = normalize_location(location)
+        if normalized and normalized.split()[-1] in US_REGION_COMPONENT_ALIASES:
+            return f"{normalized} us"
+        return normalized
+
+    return {
+        build_job_id(
+            company_name, title, locations, terms, location_normalizer=normalizer
+        )
+        for normalizer in (_normalize_location_v1, with_country)
+    }
 
 
 def _unique_known_seasons(seasons: list[str]) -> list[str]:
@@ -269,6 +308,8 @@ class Internship(BaseModel):
     job_year: str = ""
     season_tags: list[str] = Field(default_factory=list)
     source: str = ""
+    legacy_ids: set[str] = Field(default_factory=set)
+    source_urls: set[str] = Field(default_factory=set)
 
     @property
     def company_key(self) -> str:
@@ -322,8 +363,11 @@ class ScrapedData(BaseModel):
     def add_to_season(self, season: str, internship: Internship) -> None:
         """Add an internship to a season bucket if it is not already present."""
         listings = getattr(self, season)
-        if internship.id in {listing.id for listing in listings}:
-            return
+        for listing in listings:
+            if listing.id == internship.id:
+                listing.legacy_ids.update(internship.legacy_ids)
+                listing.source_urls.update(internship.source_urls | {internship.url})
+                return
         listings.append(internship)
 
     def filter_by_companies(self, company_names: set[str]) -> "ScrapedData":

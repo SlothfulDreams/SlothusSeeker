@@ -19,6 +19,7 @@ from src.scraper.data_models import (
     SEASONS,
     ScrapedData,
     build_job_id,
+    build_legacy_job_ids,
     detect_seasons,
     infer_job_year,
 )
@@ -347,6 +348,7 @@ def parse_jobright_readme(
             company_url=company_url,
             job_year=job_year,
             source="Jobright",
+            legacy_ids=build_legacy_job_ids(company_name, title, locations, default_terms),
         )
 
         if not internship.should_be_posted():
@@ -441,6 +443,7 @@ def parse_simplify_readme(
                 job_year=job_year,
                 season_tags=seasons,
                 source=source_name,
+                legacy_ids=build_legacy_job_ids(company_name, title, locations, terms_for_year),
             )
 
             if not internship.should_be_posted():

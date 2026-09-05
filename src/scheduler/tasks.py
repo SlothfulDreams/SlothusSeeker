@@ -156,14 +156,14 @@ async def scrape_and_post(
                 continue
 
             for destination in destinations:
-                posted_ids = await config_manager.get_posted_job_ids(
+                posted_history = await config_manager.get_posted_history(
                     destination["guild_id"],
                     season,
                 )
                 pending_listings = [
                     internship
                     for internship in listings
-                    if internship.id not in posted_ids
+                    if not posted_history.contains(internship)
                 ]
                 for internship in pending_listings:
                     new_job_keys.add((season, internship.id))

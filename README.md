@@ -186,6 +186,18 @@ The bot also creates a local JSON file automatically:
 
 This file persists across restarts and is gitignored.
 
+## Duplicate Prevention
+
+Posting history and company lists are read in complete, ID-ordered database pages.
+Equivalent US city/state formats now share a job ID across Jobright and Simplify.
+Existing records are retained: matching checks canonical IDs, legacy ID aliases,
+and exact saved source URLs with matching company, normalized title, and job year.
+Aliases from merged feed entries are kept for matching, even when only one embed is posted.
+
+Older records do not contain locations, so a complete historical ID migration is
+not possible. Compatibility matching is conservative; unrelated jobs are not
+merged merely because their company and title match. No history reset is needed.
+
 ## Filtering Logic
 
 **US-Only Locations (all feeds):**

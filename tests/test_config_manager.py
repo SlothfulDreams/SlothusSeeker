@@ -90,6 +90,18 @@ async def test_company_reads_include_all_pages(monkeypatch, tmp_path):
     assert await manager.get_company_names() == {f"company {index}" for index in range(1, 8)}
 
 
+async def test_compatible_history_reads_all_pages_and_scopes_rows(monkeypatch, tmp_path):
+    rows = [
+        {"id": index, "job_id": f"job-{index}", "guild_id": guild, "season": season,
+         "url": f"https://example.com/{index}", "company_name": "Example", "title": "Intern", "job_year": "2026"}
+        for index, guild, season in [(1, "g1", "summer"), (2, "g1", "summer"), (3, "g2", "summer"), (4, "g1", "fall")]
+    ]
+    manager = make_manager(monkeypatch, tmp_path, FakeClient({"posted_jobs": rows}, cap=1))
+    history = await manager.get_posted_history("g1", "summer")
+    assert history.ids == {"job-1", "job-2"}
+    assert len(history.url_keys) == 2
+
+
 @pytest.mark.parametrize("table", ["posted_jobs", "companies"])
 async def test_page_failure_never_returns_partial_results(monkeypatch, tmp_path, table):
     rows = [
