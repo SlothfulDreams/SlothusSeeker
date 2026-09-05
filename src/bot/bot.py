@@ -6,6 +6,7 @@ from discord.ext import commands
 
 from src.config.config_manager import ConfigManager
 from src.config.settings import DISCORD_BOT_TOKEN, SYNC_COMMANDS_ON_START
+from src.scraper.diagnostics import ScrapeMonitor
 from src.utils.logger import setup_logger
 
 logger = setup_logger(__name__)
@@ -23,6 +24,7 @@ class InternshipBot(commands.Bot):
         )
 
         self.config_manager = config_manager
+        self.scrape_monitor = ScrapeMonitor()
         self.tree.on_error = self.on_app_command_error
 
     async def setup_hook(self):

@@ -1,7 +1,6 @@
 """Background tasks for periodic scraping."""
 
 import asyncio
-from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Iterable
 
@@ -17,6 +16,7 @@ from src.scraper.data_models import (
     Internship,
     ScrapedData,
 )
+from src.scraper.diagnostics import ScrapeStats
 from src.scraper.github_client import GitHubClient
 from src.utils.logger import setup_logger
 
@@ -24,21 +24,6 @@ logger = setup_logger(__name__)
 
 EVERYONE_MENTION = "@everyone"
 EVERYONE_ALLOWED_MENTIONS = discord.AllowedMentions(everyone=True)
-
-
-@dataclass(slots=True)
-class ScrapeStats:
-    """Summary of a scrape/post cycle."""
-
-    posted_by_season: dict[str, int] = field(
-        default_factory=lambda: {season: 0 for season in SEASONS}
-    )
-    total_new: int = 0
-    errors: int = 0
-
-    @property
-    def total_posted(self) -> int:
-        return sum(self.posted_by_season.values())
 
 
 class DeliveryRecordingError(RuntimeError):
@@ -53,6 +38,7 @@ async def _post_internships(
     *,
     config_manager: ConfigManager,
     guild_id: str,
+    stats: ScrapeStats | None = None,
 ) -> tuple[list[Internship], int]:
     """Post internship embeds to one configured channel.
 
@@ -67,21 +53,26 @@ async def _post_internships(
     Returns:
         Tuple with successfully posted internships and error count
     """
+    stats = stats if stats is not None else ScrapeStats()
     posted_internships = []
     error_count = 0
     internships = tuple(internships)
+    if not internships:
+        return posted_internships, error_count
 
     channel = bot.get_channel(channel_id)
     if not channel:
         logger.warning("Configured %s channel not found: %s", channel_type, channel_id)
-        return posted_internships, error_count
+        stats.errors += 1
+        return posted_internships, 1
     if not isinstance(channel, discord.abc.Messageable):
         logger.warning(
             "Configured %s channel is not messageable: %s",
             channel_type,
             channel_id,
         )
-        return posted_internships, error_count
+        stats.errors += 1
+        return posted_internships, 1
 
     for internship in internships:
         embed = create_internship_embed(internship)
@@ -93,6 +84,7 @@ async def _post_internships(
             )
         except Exception as e:
             error_count += 1
+            stats.errors += 1
             logger.error(
                 "Error posting %s internship to channel %s: %s",
                 channel_type,
@@ -102,6 +94,7 @@ async def _post_internships(
             )
             continue
 
+        stats.posted_by_season[channel_type] += 1
         # Checkpoint before throttling or sending anything else. A write failure
         # must not be treated as a failed send and followed by more untracked posts.
         try:
@@ -109,10 +102,12 @@ async def _post_internships(
                 guild_id, channel_type, channel_id, [internship]
             )
         except Exception as exc:
+            stats.unrecorded += 1
             raise DeliveryRecordingError(
                 f"Sent job {internship.id} to channel {channel_id}, but could not "
                 "record the delivery. Remaining batch stopped."
             ) from exc
+        stats.recorded += 1
         posted_internships.append(internship)
         await asyncio.sleep(POST_THROTTLE_SECONDS)
 
@@ -129,7 +124,7 @@ def _log_start_timestamp(start_timestamp: int | None) -> None:
 
 
 async def _fetch_allowlisted_listings(
-    config_manager: ConfigManager,
+    config_manager: ConfigManager, stats: ScrapeStats,
 ) -> ScrapedData:
     """Fetch listings and apply configured company/date filters."""
     start_timestamp = config_manager.get_scrape_start_timestamp()
@@ -137,13 +132,16 @@ async def _fetch_allowlisted_listings(
     _log_start_timestamp(start_timestamp)
 
     if not company_names:
-        logger.info("No companies configured. Skipping Jobright fetch.")
+        stats.outcome = "skipped"
+        stats.note = "No companies configured. Use /companies add first."
+        logger.info(stats.note)
         return ScrapedData()
 
     async with GitHubClient() as github_client:
         return await github_client.get_allowlisted_listings(
             company_names,
             start_timestamp,
+            diagnostics=stats.sources,
         )
 
 
@@ -160,10 +158,18 @@ async def scrape_and_post(
         Scrape/post statistics
     """
     logger.info("Starting scrape...")
-    stats = ScrapeStats()
+    monitor = bot.scrape_monitor
+    stats = monitor.begin()
 
     try:
-        allowlisted_listings = await _fetch_allowlisted_listings(config_manager)
+        if not await config_manager.has_any_configured_channel():
+            stats.outcome = "skipped"
+            stats.note = "No season channels configured. Use /config set-season-channel first."
+            return stats
+
+        allowlisted_listings = await _fetch_allowlisted_listings(config_manager, stats)
+        if stats.outcome == "skipped":
+            return stats
         new_job_keys: set[tuple[str, str]] = set()
 
         for season in SEASONS:
@@ -171,6 +177,7 @@ async def scrape_and_post(
             destinations = await config_manager.get_channel_destinations(season)
 
             if not destinations:
+                stats.unconfigured += len(listings)
                 logger.info(
                     "No %s channel configured. Leaving matching jobs eligible for later.",
                     SEASON_DISPLAY_NAMES[season].lower(),
@@ -187,8 +194,10 @@ async def scrape_and_post(
                     for internship in listings
                     if not posted_history.contains(internship)
                 ]
+                stats.already_posted += len(listings) - len(pending_listings)
                 for internship in pending_listings:
                     new_job_keys.add((season, internship.id))
+                stats.total_new = len(new_job_keys)
 
                 logger.info(
                     "Found %s new %s internships for guild %s",
@@ -197,18 +206,17 @@ async def scrape_and_post(
                     destination["guild_id"],
                 )
 
-                posted_internships, errors = await _post_internships(
+                await _post_internships(
                     bot,
                     season,
                     destination["channel_id"],
                     pending_listings,
                     config_manager=config_manager,
                     guild_id=destination["guild_id"],
+                    stats=stats,
                 )
-                stats.posted_by_season[season] += len(posted_internships)
-                stats.errors += errors
 
-        stats.total_new = len(new_job_keys)
+        stats.outcome = "partial" if stats.errors else "success"
 
         logger.info(
             "Scrape completed: %s total posts across %s new listings",
@@ -216,9 +224,22 @@ async def scrape_and_post(
             stats.total_new,
         )
 
+    except asyncio.CancelledError:
+        stats.outcome = "interrupted"
+        stats.note = "Scrape interrupted; completed delivery checkpoints are retained."
+        raise
     except Exception as e:
+        stats.outcome = "failed"
+        stats.errors += 1
+        stats.note = (
+            "A message was sent but its delivery could not be recorded. Batch stopped; check logs."
+            if isinstance(e, DeliveryRecordingError)
+            else "Scrape failed. Check logs for details."
+        )
         logger.error("Error during scrape: %s", e, exc_info=True)
         raise
+    finally:
+        monitor.finish(stats)
 
     return stats
 
@@ -240,10 +261,6 @@ class ScraperTasks(commands.Cog):
     @tasks.loop(minutes=15.0)  # Default interval, will be changed in __init__
     async def scrape_task(self):
         """Periodic scraping task."""
-        if not await self.config_manager.has_any_configured_channel():
-            logger.info("No season channels configured. Skipping scheduled scrape")
-            return
-
         await scrape_and_post(self.bot, self.config_manager)
 
     @scrape_task.before_loop

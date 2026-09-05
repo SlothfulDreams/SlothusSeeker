@@ -5,6 +5,7 @@ import pytest
 from src.config.config_manager import PostedJobHistory
 from src.scheduler import tasks
 from src.scraper.data_models import Internship, ScrapedData
+from src.scraper.diagnostics import ScrapeMonitor
 
 
 class Channel(tasks.discord.abc.Messageable):
@@ -33,6 +34,9 @@ class Manager:
         self.ids.add(job.id)
         self.events.append(("record", job.id))
 
+    async def has_any_configured_channel(self):
+        return True
+
     async def get_posted_history(self, guild_id, season):
         return PostedJobHistory([{"job_id": job_id} for job_id in self.ids])
 
@@ -43,6 +47,7 @@ class Manager:
 class Bot:
     def __init__(self, channel):
         self.channel = channel
+        self.scrape_monitor = ScrapeMonitor()
 
     def get_channel(self, channel_id):
         return self.channel
@@ -110,7 +115,7 @@ async def test_interrupted_batch_skips_checkpointed_delivery_on_next_scrape(monk
     manager, bot = Manager(events), Bot(Channel(events))
     data = ScrapedData(summer=jobs)
 
-    async def fetch(_manager):
+    async def fetch(_manager, _stats):
         return data
 
     async def interrupt(_seconds):
@@ -121,6 +126,10 @@ async def test_interrupted_batch_skips_checkpointed_delivery_on_next_scrape(monk
     with pytest.raises(asyncio.CancelledError):
         await tasks.scrape_and_post(bot, manager)
     assert manager.ids == {jobs[0].id}
+    assert bot.scrape_monitor.last_result.outcome == "interrupted"
+    assert bot.scrape_monitor.last_result.recorded == 1
+    assert bot.scrape_monitor.last_result.total_posted == 1
+    assert bot.scrape_monitor.active_runs == []
 
     async def sleep(_seconds):
         pass
@@ -128,6 +137,9 @@ async def test_interrupted_batch_skips_checkpointed_delivery_on_next_scrape(monk
     monkeypatch.setattr(tasks.asyncio, "sleep", sleep)
     result = await tasks.scrape_and_post(bot, manager)
     assert result.total_posted == 1
+    assert result.already_posted == 1
+    assert result.outcome == "success"
+    assert bot.scrape_monitor.last_success_at == result.finished_at
     assert [event for event in events if event[0] == "send"] == [
         ("send", job.url) for job in jobs
     ]

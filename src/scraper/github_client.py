@@ -22,7 +22,10 @@ from src.scraper.data_models import (
     build_legacy_job_ids,
     detect_seasons,
     infer_job_year,
+    locations_are_us_only,
+    normalize_company_name,
 )
+from src.scraper.diagnostics import SourceStats
 from src.scraper.exceptions import FetchError, NetworkError, ParseError, RateLimitError
 from src.utils.logger import setup_logger
 from src.utils.retry import retry_with_backoff
@@ -296,10 +299,35 @@ def _simplify_row_cells(row: list[_SimplifyCell]) -> _SimplifyRowCells | None:
     )
 
 
-def _merge_scraped_data(target: ScrapedData, source: ScrapedData) -> None:
+def _merge_scraped_data(
+    target: ScrapedData, source: ScrapedData, diagnostics: SourceStats | None = None
+) -> None:
     for season in SEASONS:
         for internship in getattr(source, season):
+            if diagnostics is not None and internship.id in target.get_all_ids(season):
+                diagnostics.cross_source_duplicates += 1
             target.add_to_season(season, internship)
+
+
+def _add_eligible_listing(
+    data: ScrapedData, internship: Internship, stats: SourceStats,
+    start_timestamp: int | None, company_names: set[str] | None,
+) -> None:
+    """Give each valid source row one outcome, before expanding season buckets."""
+    if not internship.seasons:
+        stats.no_season += 1
+    elif not locations_are_us_only(internship.locations):
+        stats.location += 1
+    elif start_timestamp and internship.date_posted and internship.date_posted < start_timestamp:
+        stats.old += 1
+    elif company_names is not None and internship.company_key not in company_names:
+        stats.company_filtered += 1
+    else:
+        if all(internship.id in data.get_all_ids(season) for season in internship.seasons):
+            stats.duplicate_rows += 1
+        else:
+            stats.eligible += 1
+        data.add(internship)
 
 
 def parse_jobright_readme(
@@ -308,14 +336,18 @@ def parse_jobright_readme(
     default_terms: list[str] | None = None,
     *,
     reference_time: datetime | None = None,
+    diagnostics: SourceStats | None = None,
+    company_names: set[str] | None = None,
 ) -> ScrapedData:
     """Parse Jobright README Markdown into season-bucketed internships."""
     reference_time = _utc_reference_time(reference_time)
+    stats = diagnostics if diagnostics is not None else SourceStats()
+    stats.parsed = True
+    if company_names is not None:
+        company_names = {normalize_company_name(name) for name in company_names}
     scraped_data = ScrapedData()
     previous_company_name = ""
     previous_company_url = ""
-    rows_processed = 0
-    rows_filtered = 0
 
     for raw_line in readme_text.splitlines():
         line = raw_line.strip()
@@ -323,11 +355,16 @@ def parse_jobright_readme(
             continue
 
         cells = _split_table_row(line)
-        if len(cells) < 5 or _is_separator_row(cells):
+        if _is_separator_row(cells):
             continue
 
         header = [cell.lower() for cell in cells[:5]]
         if header[:2] == ["company", "job title"]:
+            continue
+
+        stats.rows += 1
+        if len(cells) < 5:
+            stats.malformed += 1
             continue
 
         company_cell, title_cell, *rest = cells
@@ -343,9 +380,9 @@ def parse_jobright_readme(
         locations, work_model, date_label, date_posted = _parse_location_work_date(rest, reference_time)
 
         if not company_name or not title or not url:
+            stats.malformed += 1
             continue
 
-        rows_processed += 1
         job_year = infer_job_year(title, default_terms)
         internship = Internship(
             id=build_job_id(
@@ -367,14 +404,7 @@ def parse_jobright_readme(
             legacy_ids=build_legacy_job_ids(company_name, title, locations, default_terms),
         )
 
-        if not internship.should_be_posted():
-            continue
-
-        if start_timestamp and date_posted and date_posted < start_timestamp:
-            rows_filtered += 1
-            continue
-
-        scraped_data.add(internship)
+        _add_eligible_listing(scraped_data, internship, stats, start_timestamp, company_names)
 
     for season in SEASONS:
         getattr(scraped_data, season).sort(
@@ -384,8 +414,8 @@ def parse_jobright_readme(
 
     logger.info(
         "Processed %s Jobright rows, filtered %s old rows, found %s season listings",
-        rows_processed,
-        rows_filtered,
+        stats.rows,
+        stats.old,
         scraped_data.total_count(),
     )
 
@@ -400,22 +430,28 @@ def parse_simplify_readme(
     default_terms: list[str] | None = None,
     start_timestamp: int | None = None,
     reference_time: datetime | None = None,
+    diagnostics: SourceStats | None = None,
+    company_names: set[str] | None = None,
 ) -> ScrapedData:
     """Parse selected Simplify README sections into season-bucketed internships."""
     reference_time = _utc_reference_time(reference_time)
+    stats = diagnostics if diagnostics is not None else SourceStats()
+    stats.parsed = True
+    if company_names is not None:
+        company_names = {normalize_company_name(name) for name in company_names}
     scraped_data = ScrapedData()
     previous_company_name = ""
     previous_company_url = ""
-    rows_processed = 0
-    rows_filtered = 0
 
     for section in _simplify_sections(readme_text):
         parser = _SimplifyTableParser()
         parser.feed(section)
 
         for row in parser.rows:
+            stats.rows += 1
             cells = _simplify_row_cells(row)
             if cells is None:
+                stats.malformed += 1
                 continue
 
             company_name = _simplify_company_name(cells.company.text)
@@ -439,9 +475,9 @@ def parse_simplify_readme(
             date_posted = _parse_age_label(age_label, reference_time)
 
             if not company_name or not title or not url:
+                stats.malformed += 1
                 continue
 
-            rows_processed += 1
             terms_for_year = [terms] if terms else []
             job_year = infer_job_year(title, terms_for_year)
             internship = Internship(
@@ -464,14 +500,7 @@ def parse_simplify_readme(
                 legacy_ids=build_legacy_job_ids(company_name, title, locations, terms_for_year),
             )
 
-            if not internship.should_be_posted():
-                continue
-
-            if start_timestamp and date_posted and date_posted < start_timestamp:
-                rows_filtered += 1
-                continue
-
-            scraped_data.add(internship)
+            _add_eligible_listing(scraped_data, internship, stats, start_timestamp, company_names)
 
     for season in SEASONS:
         getattr(scraped_data, season).sort(
@@ -481,9 +510,9 @@ def parse_simplify_readme(
 
     logger.info(
         "Processed %s %s rows, filtered %s old rows, found %s season listings",
-        rows_processed,
+        stats.rows,
         source_name,
-        rows_filtered,
+        stats.old,
         scraped_data.total_count(),
     )
 
@@ -558,10 +587,15 @@ class GitHubClient:
             raise NetworkError(f"Network error: {exc}") from exc
 
     async def fetch_listings(
-        self, start_timestamp: int | None = None, *, reference_time: datetime | None = None
+        self, start_timestamp: int | None = None, *, reference_time: datetime | None = None,
+        diagnostics: dict[str, SourceStats] | None = None,
+        company_names: set[str] | None = None,
     ) -> ScrapedData:
         """Fetch and parse all sources against one shared reference time."""
         reference_time = _utc_reference_time(reference_time)
+        sources = diagnostics if diagnostics is not None else {}
+        for name in ("Jobright", "Simplify Summer", "Simplify Off-Season"):
+            sources[name] = SourceStats()
         try:
             jobright_text, simplify_summer_text, simplify_off_season_text = (
                 await asyncio.gather(
@@ -578,6 +612,8 @@ class GitHubClient:
             start_timestamp,
             default_terms=_default_terms_from_source(jobright_text, self.url),
             reference_time=reference_time,
+            diagnostics=sources["Jobright"],
+            company_names=company_names,
         )
         _merge_scraped_data(
             listings,
@@ -592,7 +628,10 @@ class GitHubClient:
                 ),
                 start_timestamp=start_timestamp,
                 reference_time=reference_time,
+                diagnostics=sources["Simplify Summer"],
+                company_names=company_names,
             ),
+            sources["Simplify Summer"],
         )
         _merge_scraped_data(
             listings,
@@ -605,7 +644,10 @@ class GitHubClient:
                 ),
                 start_timestamp=start_timestamp,
                 reference_time=reference_time,
+                diagnostics=sources["Simplify Off-Season"],
+                company_names=company_names,
             ),
+            sources["Simplify Off-Season"],
         )
         return listings
 
@@ -613,7 +655,10 @@ class GitHubClient:
         self,
         company_names: set[str],
         start_timestamp: int | None = None,
+        *,
+        diagnostics: dict[str, SourceStats] | None = None,
     ) -> ScrapedData:
-        """Get allow-listed listings from the configured source."""
-        all_listings = await self.fetch_listings(start_timestamp)
-        return all_listings.filter_by_companies(company_names)
+        """Filter each source before merging, preserving per-source row outcomes."""
+        return await self.fetch_listings(
+            start_timestamp, diagnostics=diagnostics, company_names=company_names
+        )

@@ -6,7 +6,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from src.bot.embeds import create_config_embed
+from src.bot.embeds import create_config_embed, create_status_embed
 from src.bot.views import CompanyListView
 from src.config.config_manager import ConfigManager
 from src.config.settings import COMPANIES_PER_PAGE
@@ -78,6 +78,10 @@ class ConfigCommands(commands.Cog):
 
     def _format_scrape_summary(self, heading: str, stats: ScrapeStats) -> str:
         """Create a concise scrape summary for slash command followups."""
+        if stats.outcome == "skipped":
+            return f"⏭️ **Scrape skipped**\n{stats.note}"
+        if stats.outcome == "partial":
+            heading = "⚠️ **Scrape completed with errors**"
         lines = [heading, "", "📊 **Results:**"]
         for season in SEASONS:
             label = SEASON_DISPLAY_NAMES[season]
@@ -204,6 +208,34 @@ class ConfigCommands(commands.Cog):
         except Exception as e:
             await self._send_operation_error(interaction, "loading configuration", e)
 
+    @app_commands.command(name="status", description="Show scraper health and latest session results")
+    async def status(self, interaction: discord.Interaction):
+        """Read session diagnostics without fetching listings or changing settings."""
+        if not await self._require_guild(interaction):
+            return
+        await interaction.response.defer(ephemeral=True)
+        try:
+            scraper = get_scraper_cog(self.bot)
+            scheduler_state = "Unavailable"
+            next_iteration = None
+            if scraper:
+                loop = scraper.scrape_task
+                if loop.failed():
+                    scheduler_state = "Stopped (failed)"
+                elif loop.is_running():
+                    scheduler_state = "Running"
+                    next_iteration = loop.next_iteration
+                else:
+                    scheduler_state = "Stopped"
+            embed = create_status_embed(
+                self.bot.scrape_monitor,
+                scheduler_state=scheduler_state,
+                next_iteration=next_iteration,
+            )
+            await interaction.followup.send(embed=embed, ephemeral=True)
+        except Exception as e:
+            await self._send_operation_error(interaction, "loading scraper status", e)
+
     @config_group.command(
         name="scrape-now",
         description="Manually trigger an internship scrape",
@@ -214,20 +246,6 @@ class ConfigCommands(commands.Cog):
         await interaction.response.defer(ephemeral=True)
 
         try:
-            if not await self.config_manager.has_any_configured_channel():
-                await interaction.followup.send(
-                    "⚠️ No season channels configured! Use `/config set-season-channel` first.",
-                    ephemeral=True,
-                )
-                return
-
-            if not await self.config_manager.get_company_names():
-                await interaction.followup.send(
-                    "⚠️ No companies configured! Use `/companies add` first.",
-                    ephemeral=True,
-                )
-                return
-
             stats = await scrape_and_post(self.bot, self.config_manager)
             response = self._format_scrape_summary("✅ **Scrape Complete**", stats)
 

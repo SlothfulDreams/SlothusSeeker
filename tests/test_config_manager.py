@@ -11,6 +11,7 @@ class FakeQuery:
         self.table = table
         self.filters = {}
         self.cursor = 0
+        self.payload = None
 
     def select(self, columns):
         self.columns = columns.split(",")
@@ -33,10 +34,24 @@ class FakeQuery:
         self.cursor = value
         return self
 
+    def upsert(self, rows, on_conflict):
+        self.payload = rows
+        self.conflict_keys = on_conflict.split(",")
+        return self
+
     def execute(self):
         self.client.calls.append(self)
         if len(self.client.calls) == self.client.fail_on_call:
             raise RuntimeError("database unavailable")
+        if self.payload is not None:
+            stored = self.client.rows[self.table]
+            for row in self.payload:
+                existing = next((item for item in stored if all(item[key] == row[key] for key in self.conflict_keys)), None)
+                if existing is not None:
+                    existing.update(row)
+                else:
+                    stored.append({"id": max((item["id"] for item in stored), default=0) + 1, **row})
+            return SimpleNamespace(data=self.payload)
         rows = sorted(self.client.rows[self.table], key=lambda row: row["id"])
         matches = [
             row for row in rows
@@ -114,3 +129,80 @@ async def test_page_failure_never_returns_partial_results(monkeypatch, tmp_path,
             await manager.get_company_names()
         else:
             await manager.get_posted_job_ids("g1", "summer")
+
+
+async def test_end_to_end_legacy_history_merge_checkpoint_and_status(monkeypatch, tmp_path):
+    from datetime import datetime, timezone
+    from unittest.mock import AsyncMock
+
+    from src.bot.embeds import create_status_embed
+    from src.scheduler import tasks
+    from src.scraper.data_models import _normalize_location_v1, build_job_id
+    from src.scraper.diagnostics import ScrapeMonitor
+    from src.scraper.github_client import GitHubClient
+
+    legacy_id = build_job_id(
+        "Example", "Summer Software Intern 2027", ["New York, NY, United States"],
+        location_normalizer=_normalize_location_v1,
+    )
+    rows = [{
+        "id": 1, "job_id": legacy_id, "url": "https://older-source.com/job",
+        "company_name": "Example", "title": "Summer Software Intern 2027", "job_year": "2027",
+        "guild_id": "g1", "season": "summer",
+    }]
+    client = FakeClient({"posted_jobs": rows, "companies": [{"id": 1, "company_name": "example"}]}, cap=1)
+    manager = make_manager(monkeypatch, tmp_path, client)
+    manager.set_scrape_start_timestamp(1)
+    monkeypatch.setattr(manager, "has_any_configured_channel", AsyncMock(return_value=True))
+
+    async def destinations(season):
+        return [{"guild_id": "g1", "channel_id": 123}] if season == "summer" else []
+
+    monkeypatch.setattr(manager, "get_channel_destinations", destinations)
+
+    async def fetch_url(self, url, _marker):
+        if url == self.url:
+            date = datetime.now(timezone.utc).strftime("%b %d")
+            return (
+                f"| Example | [Summer Software Intern 2027](https://jobright.ai/old) | NYC | Hybrid | {date} |\n"
+                f"| Example | [Summer Data Engineer Intern 2027](https://jobright.ai/new) | San Francisco, CA, United States | Hybrid | {date} |"
+            )
+        roles = ["Software", "Data Engineer"] if url == self.simplify_summer_url else ["Data Engineer"]
+        season = "Summer" if url == self.simplify_summer_url else "Fall"
+        text = "## Software Engineering Internship Roles\n<table>"
+        for role in roles:
+            location = "New York, NY" if role == "Software" else "SF"
+            text += (
+                f"<tr><td>Example</td><td>{role} Intern 2027</td><td>{location}</td><td>{season} 2027</td>"
+                f'<td><a href="https://example.com/{role.replace(" ", "-")}">Apply</a></td><td>0d</td></tr>'
+            )
+        return text + "</table>"
+
+    monkeypatch.setattr(GitHubClient, "_fetch_url", fetch_url)
+    events = []
+
+    class Channel(tasks.discord.abc.Messageable):
+        async def send(self, **kwargs):
+            events.append(kwargs)
+
+    bot = SimpleNamespace(scrape_monitor=ScrapeMonitor(), get_channel=lambda _id: Channel())
+    monkeypatch.setattr(tasks.asyncio, "sleep", AsyncMock())
+    result = await tasks.scrape_and_post(bot, manager)
+    assert result.outcome == "success"
+    assert result.already_posted == 1
+    assert result.unconfigured == 1
+    assert result.total_new == result.total_posted == result.recorded == 1
+    assert result.sources["Simplify Summer"].cross_source_duplicates == 2
+    assert len(rows) == 2  # Legacy history retained, only the new delivery written.
+    assert rows[0]["job_id"] == legacy_id
+    assert rows[1]["job_id"] == build_job_id("Example", "Summer Data Engineer Intern 2027", ["SF"])
+    assert len(events) == 1
+    assert "Source: Jobright" in events[0]["embed"].footer.text
+    embed = create_status_embed(bot.scrape_monitor, scheduler_state="Running")
+    assert "Sent: 1 · Recorded: 1" in next(field.value for field in embed.fields if field.name.startswith("Season/channel"))
+
+    again = await tasks.scrape_and_post(bot, manager)
+    assert again.total_posted == again.total_new == 0
+    assert again.already_posted == 2
+    assert len(events) == 1
+    assert len(rows) == 2

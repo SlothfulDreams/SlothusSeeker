@@ -3,6 +3,7 @@ import pytest
 from src.config.config_manager import PostedJobHistory, _posted_job_row
 from src.scheduler import tasks
 from src.scraper.data_models import Internship, ScrapedData
+from src.scraper.diagnostics import ScrapeMonitor
 
 GUILD_ID = "guild-1"
 CHANNEL_ID = 123
@@ -22,6 +23,9 @@ class FakeConfigManager:
     def __init__(self, posted_ids=None):
         self.posted_ids = posted_ids or {}
         self.recorded_jobs = []
+
+    async def has_any_configured_channel(self):
+        return True
 
     async def get_channel_destinations(self, season):
         if season == "summer":
@@ -57,8 +61,9 @@ class FakeChannel(tasks.discord.abc.Messageable):
 
 
 class FakeBot:
-    def __init__(self, channel):
+    def __init__(self, channel=None):
         self.channel = channel
+        self.scrape_monitor = ScrapeMonitor()
 
     def get_channel(self, _channel_id):
         return self.channel
@@ -72,14 +77,16 @@ def _scraped_data(*internships: Internship) -> ScrapedData:
 
 
 def _stub_scrape_source(monkeypatch, listings: ScrapedData) -> None:
-    async def fake_fetch_allowlisted_listings(_config_manager):
+    async def fake_fetch_allowlisted_listings(_config_manager, _stats):
         return listings
 
     async def fake_post_internships(
-        _bot, _season, _channel_id, internships, *, config_manager, guild_id
+        _bot, _season, _channel_id, internships, *, config_manager, guild_id, stats
     ):
         for internship in internships:
             await config_manager.record_posted_jobs(guild_id, _season, _channel_id, [internship])
+            stats.posted_by_season[_season] += 1
+            stats.recorded += 1
         return list(internships), 0
 
     monkeypatch.setattr(
@@ -101,7 +108,7 @@ async def test_scrape_records_only_posted_configured_destinations(monkeypatch):
     )
 
     config_manager = FakeConfigManager()
-    stats = await tasks.scrape_and_post(object(), config_manager)
+    stats = await tasks.scrape_and_post(FakeBot(), config_manager)
 
     assert stats.posted_by_season["summer"] == 1
     assert stats.posted_by_season["fall"] == 0
@@ -125,7 +132,7 @@ async def test_scrape_skips_jobs_already_recorded_in_supabase(monkeypatch):
     config_manager = FakeConfigManager(
         posted_ids={(GUILD_ID, "summer"): {"summer-1"}}
     )
-    stats = await tasks.scrape_and_post(object(), config_manager)
+    stats = await tasks.scrape_and_post(FakeBot(), config_manager)
 
     assert stats.total_new == 0
     assert stats.posted_by_season["summer"] == 0

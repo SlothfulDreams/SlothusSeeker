@@ -6,7 +6,7 @@
 [![UV](https://img.shields.io/badge/managed%20with-uv-DE5FE9?style=for-the-badge)](https://docs.astral.sh/uv/)
 [![GitHub Repo](https://img.shields.io/badge/github-SlothfulDreams%2FSlothusSeeker-181717?style=for-the-badge&logo=github&logoColor=white)](https://github.com/SlothfulDreams/SlothusSeeker)
 
-A Discord bot that automatically scrapes internship listings from [Jobright's 2026 Software Engineer Internship repository](https://github.com/jobright-ai/2026-Software-Engineer-Internship) and posts allow-listed company matches to configured Discord channels.
+A Discord bot that scrapes internship listings from [Jobright](https://github.com/jobright-ai/2026-Software-Engineer-Internship) and [Simplify's Summer and Off-Season feeds](https://github.com/SimplifyJobs/Summer2026-Internships), then posts US-only, allow-listed company matches to configured Discord channels.
 
 ## Features
 
@@ -116,6 +116,29 @@ For other hosts, use an always-on worker process with `uv run python main.py`.
 ## Bot Commands
 
 All commands are slash commands (`/command`):
+
+### Scraper Status
+
+- `/status` - Show scheduler health and the latest scrape summary (ephemeral, read-only)
+
+The status embed shows:
+- Whether the scheduler is running, stopped, failed, or unavailable, plus its next scheduled iteration when known
+- Current activity, the latest completed scrape's outcome/duration, and the last successful completion
+- Per-source candidate rows, eligible rows, and filtering reasons: malformed data, no season, non-US/unknown location, date cutoff, company mismatch, and duplicate rows
+- Cross-source duplicate **season entries**, reported separately from source-row counts
+- Sent/recorded deliveries, already-posted destination skips, unconfigured season entries, and errors
+
+Source-row outcomes use the first applicable reason in the order above; company
+filtering happens independently per feed before sources are merged. Simplify row
+counts cover only the selected Software Engineering and Data Science/AI sections.
+An eligible row can target multiple seasons or channels, so row counts and delivery
+counts are deliberately separate. Eligible does not necessarily mean newly posted.
+
+Summaries are **in memory for the current bot session only**. After a restart,
+`/status` shows no completed scrape until the next manual or scheduled run. Failed,
+skipped, and interrupted runs do not overwrite the last-success timestamp. Raw
+exceptions remain in logs; this command does not scrape, write to Supabase, or
+restart a stopped scheduler.
 
 ### Configuration Commands (Admin Only)
 
@@ -232,6 +255,24 @@ merged merely because their company and title match. No history reset is needed.
 - Only companies stored in `companies` are posted
 - Company matching lowercases and normalizes whitespace on both stored names and parsed Jobright names
 - Use `/companies list` to find IDs for deletion
+
+## Updating and Testing
+
+These improvements require no new dependencies, database migration, or posting-history reset.
+To register the new `/status` command, start the updated bot once with
+`SYNC_COMMANDS_ON_START=true`, then return it to `false` for subsequent startups.
+Global Discord command registration may take time to appear. Existing channels,
+company configuration, and posted-job records are retained.
+
+Run the regression suite, including optional development dependencies:
+
+```bash
+uv run --extra dev pytest
+```
+
+Tests mock GitHub, Discord delivery, and Supabase. They cover paginated history,
+legacy and canonical identity matching, source merging, individual delivery
+checkpoints, date boundaries, and session status reporting without sending live messages.
 
 ## Troubleshooting
 
