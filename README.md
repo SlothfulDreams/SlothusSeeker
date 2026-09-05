@@ -216,6 +216,8 @@ merged merely because their company and title match. No history reset is needed.
 - **Default**: Bot only scrapes internships from the last **3 days**
 - Configure the default with `DEFAULT_SCRAPE_DAYS_BACK`
 - Use `/config set-start-date <days_back>` to customize the time window (1-365 days)
+- Jobright month/day labels use their most recent valid occurrence, including the previous year around New Year; all feeds share one UTC reference time per fetch
+- Posting dates are independent of the internship year in the title
 - Prevents flooding channels with old/expired internships
 - Recommended values: 3-7 days for fresh postings, 30-60 days for broader coverage
 

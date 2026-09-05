@@ -2,7 +2,7 @@
 
 import asyncio
 import re
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from html.parser import HTMLParser
 from typing import NamedTuple
 
@@ -78,22 +78,33 @@ def _is_separator_row(cells: list[str]) -> bool:
     return all(TABLE_SEPARATOR_RE.match(cell.strip()) for cell in cells if cell)
 
 
-def _parse_date_label(date_label: str) -> int:
+def _utc_reference_time(reference_time: datetime | None) -> datetime:
+    reference = reference_time or datetime.now(timezone.utc)
+    if reference.tzinfo is None:
+        reference = reference.replace(tzinfo=timezone.utc)
+    return reference.astimezone(timezone.utc)
+
+
+def _parse_date_label(date_label: str, reference_time: datetime | None = None) -> int:
+    """Infer the latest valid posting date, never a future internship year."""
     if not date_label:
         return 0
 
-    normalized = date_label.replace("Sept", "Sep")
-    for fmt in ("%b %d", "%B %d"):
-        try:
-            parsed = datetime.strptime(normalized, fmt)
-            current_year = datetime.now().year
-            return int(parsed.replace(year=current_year).timestamp())
-        except ValueError:
-            continue
+    reference = _utc_reference_time(reference_time)
+    normalized = re.sub(r"\bSept\b", "Sep", date_label.strip(), flags=re.IGNORECASE)
+    # Eight years covers the longest gap between leap days (e.g. around 2100).
+    for year in range(reference.year, max(1, reference.year - 8) - 1, -1):
+        for fmt in ("%b %d %Y", "%B %d %Y"):
+            try:
+                parsed = datetime.strptime(f"{normalized} {year}", fmt).replace(tzinfo=timezone.utc)
+            except ValueError:
+                continue
+            if parsed <= reference:
+                return int(parsed.timestamp())
     return 0
 
 
-def _parse_age_label(age_label: str) -> int:
+def _parse_age_label(age_label: str, reference_time: datetime | None = None) -> int:
     match = AGE_RE.match(age_label)
     if not match:
         return 0
@@ -106,10 +117,12 @@ def _parse_age_label(age_label: str) -> int:
         delta = timedelta(days=amount)
     else:
         delta = timedelta(days=amount * 30)
-    return int((datetime.now() - delta).timestamp())
+    return int((_utc_reference_time(reference_time) - delta).timestamp())
 
 
-def _parse_location_work_date(rest: list[str]) -> tuple[list[str], str, str, int]:
+def _parse_location_work_date(
+    rest: list[str], reference_time: datetime | None = None
+) -> tuple[list[str], str, str, int]:
     if not rest:
         return [], "", "", 0
 
@@ -133,7 +146,7 @@ def _parse_location_work_date(rest: list[str]) -> tuple[list[str], str, str, int
     if date_match:
         date_label = date_match.group(0)
 
-    return locations, work_model, date_label, _parse_date_label(date_label)
+    return locations, work_model, date_label, _parse_date_label(date_label, reference_time)
 
 
 def _readme_title(readme_text: str) -> str:
@@ -293,8 +306,11 @@ def parse_jobright_readme(
     readme_text: str,
     start_timestamp: int | None = None,
     default_terms: list[str] | None = None,
+    *,
+    reference_time: datetime | None = None,
 ) -> ScrapedData:
     """Parse Jobright README Markdown into season-bucketed internships."""
+    reference_time = _utc_reference_time(reference_time)
     scraped_data = ScrapedData()
     previous_company_name = ""
     previous_company_url = ""
@@ -324,7 +340,7 @@ def parse_jobright_readme(
             previous_company_url = company_url
 
         title, url = _extract_link(title_cell)
-        locations, work_model, date_label, date_posted = _parse_location_work_date(rest)
+        locations, work_model, date_label, date_posted = _parse_location_work_date(rest, reference_time)
 
         if not company_name or not title or not url:
             continue
@@ -383,8 +399,10 @@ def parse_simplify_readme(
     default_seasons: list[str] | None = None,
     default_terms: list[str] | None = None,
     start_timestamp: int | None = None,
+    reference_time: datetime | None = None,
 ) -> ScrapedData:
     """Parse selected Simplify README sections into season-bucketed internships."""
+    reference_time = _utc_reference_time(reference_time)
     scraped_data = ScrapedData()
     previous_company_name = ""
     previous_company_url = ""
@@ -418,7 +436,7 @@ def parse_simplify_readme(
 
             url = _simplify_application_url(cells.application.links)
             age_label = _strip_html_markdown(cells.age.text)
-            date_posted = _parse_age_label(age_label)
+            date_posted = _parse_age_label(age_label, reference_time)
 
             if not company_name or not title or not url:
                 continue
@@ -539,8 +557,11 @@ class GitHubClient:
         except aiohttp.ClientError as exc:
             raise NetworkError(f"Network error: {exc}") from exc
 
-    async def fetch_listings(self, start_timestamp: int | None = None) -> ScrapedData:
-        """Fetch and parse listings from Jobright and Simplify."""
+    async def fetch_listings(
+        self, start_timestamp: int | None = None, *, reference_time: datetime | None = None
+    ) -> ScrapedData:
+        """Fetch and parse all sources against one shared reference time."""
+        reference_time = _utc_reference_time(reference_time)
         try:
             jobright_text, simplify_summer_text, simplify_off_season_text = (
                 await asyncio.gather(
@@ -556,6 +577,7 @@ class GitHubClient:
             jobright_text,
             start_timestamp,
             default_terms=_default_terms_from_source(jobright_text, self.url),
+            reference_time=reference_time,
         )
         _merge_scraped_data(
             listings,
@@ -569,6 +591,7 @@ class GitHubClient:
                     season="Summer",
                 ),
                 start_timestamp=start_timestamp,
+                reference_time=reference_time,
             ),
         )
         _merge_scraped_data(
@@ -581,6 +604,7 @@ class GitHubClient:
                     self.simplify_off_season_url,
                 ),
                 start_timestamp=start_timestamp,
+                reference_time=reference_time,
             ),
         )
         return listings
