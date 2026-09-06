@@ -615,40 +615,35 @@ class GitHubClient:
             diagnostics=sources["Jobright"],
             company_names=company_names,
         )
-        _merge_scraped_data(
-            listings,
-            parse_simplify_readme(
+        summer_listings = parse_simplify_readme(
+            simplify_summer_text,
+            source_name="Simplify Summer",
+            default_seasons=["summer"],
+            default_terms=_default_terms_from_source(
                 simplify_summer_text,
-                source_name="Simplify Summer",
-                default_seasons=["summer"],
-                default_terms=_default_terms_from_source(
-                    simplify_summer_text,
-                    self.simplify_summer_url,
-                    season="Summer",
-                ),
-                start_timestamp=start_timestamp,
-                reference_time=reference_time,
-                diagnostics=sources["Simplify Summer"],
-                company_names=company_names,
+                self.simplify_summer_url,
+                season="Summer",
             ),
-            sources["Simplify Summer"],
+            start_timestamp=start_timestamp,
+            reference_time=reference_time,
+            diagnostics=sources["Simplify Summer"],
+            company_names=company_names,
         )
-        _merge_scraped_data(
-            listings,
-            parse_simplify_readme(
+        _merge_scraped_data(listings, summer_listings, sources["Simplify Summer"])
+
+        offseason_listings = parse_simplify_readme(
+            simplify_off_season_text,
+            source_name="Simplify Off-Season",
+            default_terms=_default_terms_from_source(
                 simplify_off_season_text,
-                source_name="Simplify Off-Season",
-                default_terms=_default_terms_from_source(
-                    simplify_off_season_text,
-                    self.simplify_off_season_url,
-                ),
-                start_timestamp=start_timestamp,
-                reference_time=reference_time,
-                diagnostics=sources["Simplify Off-Season"],
-                company_names=company_names,
+                self.simplify_off_season_url,
             ),
-            sources["Simplify Off-Season"],
+            start_timestamp=start_timestamp,
+            reference_time=reference_time,
+            diagnostics=sources["Simplify Off-Season"],
+            company_names=company_names,
         )
+        _merge_scraped_data(listings, offseason_listings, sources["Simplify Off-Season"])
         return listings
 
     async def get_allowlisted_listings(

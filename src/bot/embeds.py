@@ -5,7 +5,7 @@ from datetime import datetime
 import discord
 
 from src.scraper.data_models import Internship, SEASON_DISPLAY_NAMES, SEASONS
-from src.scraper.diagnostics import ScrapeMonitor
+from src.scraper.diagnostics import ScrapeMonitor, ScrapeStats, SourceStats
 
 EMBED_TITLE_LIMIT = 256
 EMBED_DESCRIPTION_LIMIT = 4096
@@ -115,6 +115,33 @@ def create_internship_embed(internship: Internship) -> discord.Embed:
     return embed
 
 
+def _format_source_stats(source: SourceStats) -> str:
+    if not source.parsed:
+        return "Not parsed."
+    return (
+        f"Rows: {source.rows} · Eligible: {source.eligible}\n"
+        f"Malformed: {source.malformed} · No season: {source.no_season}\n"
+        f"Non-US/unknown location: {source.location} · Too old: {source.old}\n"
+        f"Company filtered: {source.company_filtered} · Duplicate rows: {source.duplicate_rows}\n"
+        f"Cross-source duplicate season entries: {source.cross_source_duplicates}"
+    )
+
+
+def _format_delivery_stats(result: ScrapeStats) -> str:
+    sent_by_season = " · ".join(
+        f"{SEASON_DISPLAY_NAMES[season]}: {result.posted_by_season[season]}"
+        for season in SEASONS
+    )
+    return (
+        f"Sent: {result.total_posted} · Recorded: {result.recorded}\n"
+        f"{sent_by_season}\n"
+        f"New season listings: {result.total_new}\n"
+        f"Already-posted destination skips: {result.already_posted}\n"
+        f"Unconfigured season entries: {result.unconfigured}\n"
+        f"Errors: {result.errors} · Sent but recording failed: {result.unrecorded}"
+    )
+
+
 def create_status_embed(
     monitor: ScrapeMonitor,
     *,
@@ -132,8 +159,15 @@ def create_status_embed(
             "interrupted": discord.Color.orange(),
         }.get(result.outcome, color)
     embed = discord.Embed(title="Scraper Status", color=color)
-    next_run = f"<t:{int(next_iteration.timestamp())}:R>" if next_iteration else "Not scheduled"
-    embed.add_field(name="Scheduler", value=f"{scheduler_state}\nNext run: {next_run}", inline=False)
+    next_run = (
+        f"<t:{int(next_iteration.timestamp())}:R>"
+        if next_iteration else "Not scheduled"
+    )
+    embed.add_field(
+        name="Scheduler",
+        value=f"{scheduler_state}\nNext run: {next_run}",
+        inline=False,
+    )
     activity = "Idle"
     if monitor.active_runs:
         latest = monitor.active_runs[-1]
@@ -148,43 +182,32 @@ def create_status_embed(
     )
     embed.add_field(name="Last successful scrape", value=last_success, inline=False)
 
+    embed.set_footer(text="Current session only · Results reset when the bot restarts")
     if result is None:
         embed.description = "No completed scrape this session."
-    else:
-        summary = f"{result.outcome.title()} · {result.duration_seconds:.1f}s"
-        if result.finished_at:
-            summary += f" · <t:{int(result.finished_at.timestamp())}:R>"
-        if result.note:
-            summary += f"\n{result.note}"
-        embed.add_field(name="Latest completed scrape", value=_truncate(summary, EMBED_FIELD_LIMIT), inline=False)
-        for name, source in result.sources.items():
-            value = "Not parsed."
-            if source.parsed:
-                value = (
-                    f"Rows: {source.rows} · Eligible: {source.eligible}\n"
-                    f"Malformed: {source.malformed} · No season: {source.no_season}\n"
-                    f"Non-US/unknown location: {source.location} · Too old: {source.old}\n"
-                    f"Company filtered: {source.company_filtered} · Duplicate rows: {source.duplicate_rows}\n"
-                    f"Cross-source duplicate season entries: {source.cross_source_duplicates}"
-                )
-            embed.add_field(name=_truncate(f"{name} — source rows", 256), value=value, inline=False)
-        sent_by_season = " · ".join(
-            f"{SEASON_DISPLAY_NAMES[season]}: {result.posted_by_season[season]}"
-            for season in SEASONS
-        )
+        return embed
+
+    summary = f"{result.outcome.title()} · {result.duration_seconds:.1f}s"
+    if result.finished_at:
+        summary += f" · <t:{int(result.finished_at.timestamp())}:R>"
+    if result.note:
+        summary += f"\n{result.note}"
+    embed.add_field(
+        name="Latest completed scrape",
+        value=_truncate(summary, EMBED_FIELD_LIMIT),
+        inline=False,
+    )
+    for name, source in result.sources.items():
         embed.add_field(
-            name="Season/channel deliveries (not source rows)",
-            value=(
-                f"Sent: {result.total_posted} · Recorded: {result.recorded}\n"
-                f"{sent_by_season}\n"
-                f"New season listings: {result.total_new}\n"
-                f"Already-posted destination skips: {result.already_posted}\n"
-                f"Unconfigured season entries: {result.unconfigured}\n"
-                f"Errors: {result.errors} · Sent but recording failed: {result.unrecorded}"
-            ),
+            name=_truncate(f"{name} — source rows", 256),
+            value=_format_source_stats(source),
             inline=False,
         )
-    embed.set_footer(text="Current session only · Results reset when the bot restarts")
+    embed.add_field(
+        name="Season/channel deliveries (not source rows)",
+        value=_format_delivery_stats(result),
+        inline=False,
+    )
     return embed
 
 
